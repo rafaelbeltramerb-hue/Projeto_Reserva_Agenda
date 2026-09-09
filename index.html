@@ -27,7 +27,7 @@
       border: 2px dashed #0d6efd;
       border-radius: 12px;
       background-color: #ffffff;
-      padding: 2rem;
+      padding: 2.5rem 1.5rem;
       text-align: center;
       cursor: pointer;
       transition: all 0.3s ease;
@@ -87,17 +87,17 @@
     <div class="card card-custom p-3">
       <div id="dropZone" class="drop-zone">
         <i class="fa-solid fa-file-pdf fa-3x text-primary mb-2"></i>
-        <h5 class="fw-bold mb-1">Arraste e solte um arquivo PDF aqui</h5>
-        <p class="text-muted small mb-0">ou clique para selecionar o arquivo no seu computador (funciona com qualquer período)</p>
-        <input type="file" id="fileInput" accept="application/pdf" class="d-none">
+        <h5 class="fw-bold mb-1">Clique aqui ou arraste o arquivo PDF</h5>
+        <p class="text-muted small mb-0">Compatível com qualquer período do relatório analítico UNOESC</p>
+        <input type="file" id="fileInput" accept="application/pdf" style="display: none;">
       </div>
       <div id="loadingSpinner" class="text-center my-3 d-none">
         <div class="spinner-border text-primary" role="status"></div>
-        <p class="mt-2 text-muted small">Extraindo e desembaralhando colunas do PDF...</p>
+        <p class="mt-2 text-muted small">Lendo PDF e processando reservas...</p>
       </div>
     </div>
 
-    <!-- Painel de Filtros e Controle de Seleção -->
+    <!-- Painel de Filtros -->
     <div id="controlsSection" class="card card-custom p-3">
       <div class="row align-items-center g-2">
         <div class="col-md-4">
@@ -125,7 +125,7 @@
       </div>
     </div>
 
-    <!-- Tabela de Reservas Extraídas -->
+    <!-- Tabela de Reservas -->
     <div id="tableSection" class="card card-custom p-3">
       <div class="table-container">
         <table class="table table-hover align-middle table-custom">
@@ -143,7 +143,9 @@
             </tr>
           </thead>
           <tbody id="reservasTableBody">
-            <!-- As linhas do PDF carregado serão inseridas aqui -->
+            <tr>
+              <td colspan="7" class="text-center text-muted py-4">Nenhum arquivo PDF carregado ainda. Selecione um PDF acima.</td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -167,26 +169,45 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 
   <script>
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    // Configura o worker do PDF.js
+    if (typeof pdfjsLib !== 'undefined') {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    }
 
     let listReservas = [];
 
-    const dropZone = document.getElementById('dropZone');
-    const fileInput = document.getElementById('fileInput');
+    document.addEventListener('DOMContentLoaded', () => {
+      const dropZone = document.getElementById('dropZone');
+      const fileInput = document.getElementById('fileInput');
 
-    dropZone.addEventListener('click', () => fileInput.click());
-    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
-    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
-    dropZone.addEventListener('drop', (e) => {
-      e.preventDefault();
-      dropZone.classList.remove('dragover');
-      if (e.dataTransfer.files.length > 0) processPDF(e.dataTransfer.files[0]);
-    });
-    fileInput.addEventListener('change', (e) => {
-      if (e.target.files.length > 0) processPDF(e.target.files[0]);
+      dropZone.addEventListener('click', () => {
+        fileInput.click();
+      });
+
+      fileInput.addEventListener('change', (e) => {
+        if (e.target.files && e.target.files.length > 0) {
+          processPDF(e.target.files[0]);
+        }
+      });
+
+      dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
+      });
+
+      dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('dragover');
+      });
+
+      dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          processPDF(e.dataTransfer.files[0]);
+        }
+      });
     });
 
-    // Processamento do PDF com divisão inteligente de colunas (Left/Right Column Split)
     async function processPDF(file) {
       if (!file || file.type !== 'application/pdf') {
         alert('Por favor, selecione um arquivo no formato PDF válido.');
@@ -212,7 +233,6 @@
 
           if (items.length === 0) continue;
 
-          // Calcula o meio da página para separar a coluna esquerda da direita
           let minX = Math.min(...items.map(it => it.x));
           let maxX = Math.max(...items.map(it => it.x));
           let midX = minX + (maxX - minX) / 2;
@@ -220,7 +240,6 @@
           let leftItems = items.filter(it => it.x < midX);
           let rightItems = items.filter(it => it.x >= midX);
 
-          // Função para ordenar verticalmente cada coluna individualmente
           function buildColumnText(colItems) {
             let lines = [];
             colItems.forEach(item => {
@@ -261,19 +280,16 @@
       }
     }
 
-    // Mapeamento regex para extrair os campos de cada bloco de reserva
     function parseBlocksToReservas(blocks) {
       let reservas = [];
 
       blocks.forEach((block) => {
         if (!block || !block.trim()) return;
 
-        // Valida se o bloco contém informações de reserva
         if (!/Hora\s+inicial|Reserva\s+para\s+Disciplina|Dados\s+da\s+Reserva/i.test(block)) {
           return;
         }
 
-        // 1. Status
         let status = 'DEFERIDO';
         const statusMatch = block.match(/\b(DEFERIDO|CANCELADO|AGUARDANDO ATENDIMENTO|AGUARDANDO)\b/i);
         if (statusMatch) {
@@ -281,7 +297,6 @@
           if (status.includes('AGUARDANDO')) status = 'AGUARDANDO ATENDIMENTO';
         }
 
-        // 2. Horários
         let horaInicio = '19:00:00';
         let horaFim = '22:35:00';
 
@@ -294,39 +309,34 @@
         if (horaInicio.length === 5) horaInicio += ':00';
         if (horaFim.length === 5) horaFim += ':00';
 
-        // 3. Data da Reserva
         let dataReserva = '';
         const datesFound = [...block.matchAll(/\b(\d{2}\/\d{2}\/\d{4})\b/g)].map(m => m[1]);
         if (datesFound.length > 0) {
-          dataReserva = datesFound[datesFound.length - 1]; // Pega a data mais recente do bloco
+          dataReserva = datesFound[datesFound.length - 1];
         }
 
         if (!dataReserva) return;
 
-        // 4. Solicitante / Pessoa
         let pessoa = 'Não informada';
         const pessoaMatch = block.match(/Pessoa:\s*(\d+\s*[-–]\s*[^\n]+)/i) || block.match(/(\d{4,7}\s*[-–]\s*[A-ZÁÉÍÓÚÂÊÔÃÕÇ\s]{3,})/i);
         if (pessoaMatch) {
           pessoa = pessoaMatch[1].trim();
         }
 
-        // 5. Bloco / Local
         let local = 'Espaço Geral';
         const blocoMatch = block.match(/Bloco\/Sala:\s*([^\n]+)/i) || block.match(/\b((?:BLOCO|CENTRO|AUDITORIO|LAB)[^\n]+)/i);
         if (blocoMatch) {
           local = blocoMatch[1].trim();
         }
 
-        // 6. Disciplina / Evento
         let disciplina = '-';
         const discMatch = block.match(/Reserva\s+para\s+Disciplina:\s*([^\n]+)/i) || block.match(/Disciplina:\s*([^\n]+)/i);
         if (discMatch) {
           disciplina = discMatch[1].trim();
         }
 
-        // 7. Recurso
         let recurso = local;
-        const recMatch = block.match(/Recurso\s+Quantidade[^\n]*\n+([^\n]+)/i) || block.match/Descrição:\s*([^\n]+)/i;
+        const recMatch = block.match(/Recurso\s+Quantidade[^\n]*\n+([^\n]+)/i) || block.match(/Descrição:\s*([^\n]+)/i);
         if (recMatch) {
           recurso = recMatch[1].replace(/\s+\d+\s*$/, '').trim();
         }
@@ -363,6 +373,12 @@
         const matchesStatus = statusFilter === 'TODOS' || res.status === statusFilter;
         return matchesSearch && matchesStatus;
       });
+
+      if (visibleList.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" class="text-center text-muted py-4">Nenhuma reserva encontrada para os filtros aplicados.</td></tr>`;
+        updateCounters();
+        return;
+      }
 
       visibleList.forEach(res => {
         let badgeClass = 'badge-deferido';

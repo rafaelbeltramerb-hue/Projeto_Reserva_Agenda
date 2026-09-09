@@ -285,12 +285,12 @@
     };
 
     const PERIODO_HORARIOS = {
-      'MATUTINO': { inicio: '08:00:00', fim: '12:00:00' },
+      'MATUTINO': { inicio: '07:30:00', fim: '12:00:00' },
       'VESPERTINO': { inicio: '13:30:00', fim: '17:30:00' },
       'NOTURNO': { inicio: '19:00:00', fim: '22:35:00' },
-      'MATUTINO E VESPERTINO': { inicio: '08:00:00', fim: '17:30:00' },
+      'MATUTINO E VESPERTINO': { inicio: '07:30:00', fim: '17:30:00' },
       'VESPERTINO E NOTURNO': { inicio: '13:30:00', fim: '22:35:00' },
-      'MATUTINO, VESPERTINO E NOTURNO': { inicio: '08:00:00', fim: '22:35:00' }
+      'MATUTINO, VESPERTINO E NOTURNO': { inicio: '07:30:00', fim: '22:35:00' }
     };
 
     function normalizeTurno(turnoRaw) {
@@ -313,7 +313,79 @@
 
     function turnoToHorario(turnoRaw) {
       const key = normalizeTurno(turnoRaw);
-      return PERIODO_HORARIOS[key] || { inicio: '08:00:00', fim: '18:00:00' };
+      return PERIODO_HORARIOS[key] || { inicio: '07:30:00', fim: '18:00:00' };
+    }
+
+    // ----------------------------------------------------------------------
+    //  Algumas reservas trazem um horário específico dentro do campo
+    //  "Observação" (ex: "Aulas Gil - Expressivo - das 07:20h às 12h.").
+    //  Quando isso acontece, esse horário deve prevalecer sobre o horário
+    //  padrão do período (Turno) ao criar o evento na agenda.
+    // ----------------------------------------------------------------------
+    function parseHourToken(tok) {
+      if (!tok) return null;
+      let m = tok.match(/^(\d{1,2}):(\d{2})h?$/i);
+      if (m) return { h: parseInt(m[1], 10), m: parseInt(m[2], 10) };
+      m = tok.match(/^(\d{1,2})h(\d{2})$/i);
+      if (m) return { h: parseInt(m[1], 10), m: parseInt(m[2], 10) };
+      m = tok.match(/^(\d{1,2})h$/i);
+      if (m) return { h: parseInt(m[1], 10), m: 0 };
+      m = tok.match(/^(\d{1,2})$/);
+      if (m) return { h: parseInt(m[1], 10), m: 0 };
+      return null;
+    }
+
+    function toHMS(t) {
+      if (!t) return null;
+      const hh = String(t.h).padStart(2, '0');
+      const mm = String(t.m).padStart(2, '0');
+      return `${hh}:${mm}:00`;
+    }
+
+    function extractHorarioFromObservacao(obs) {
+      if (!obs || !obs.trim()) return null;
+
+      // Padrão mais comum: "das HH:MMh às HH:MMh" (com/sem minutos, com/sem "h")
+      let m = obs.match(/das\s+([\d:h]+)\s*(?:às|as)\s+([\d:h]+)/i);
+      if (m) {
+        const inicio = parseHourToken(m[1]);
+        const fim = parseHourToken(m[2]);
+        if (inicio) return { inicio: toHMS(inicio), fim: fim ? toHMS(fim) : null };
+      }
+
+      // Padrão "HH:MMh às HH:MMh" sem a palavra "das"
+      m = obs.match(/([\d:h]{1,6})\s*(?:às|as)\s+([\d:h]{1,6})\s*h?\b/i);
+      if (m) {
+        const inicio = parseHourToken(m[1]);
+        const fim = parseHourToken(m[2]);
+        if (inicio) return { inicio: toHMS(inicio), fim: fim ? toHMS(fim) : null };
+      }
+
+      // Apenas início informado: "a partir das HH:MMh" / "a partir de HHh"
+      m = obs.match(/a\s+partir\s+d(?:e|as)\s+([\d:h]+)/i);
+      if (m) {
+        const inicio = parseHourToken(m[1]);
+        if (inicio) return { inicio: toHMS(inicio), fim: null };
+      }
+
+      return null;
+    }
+
+    // Resolve o horário final de uma reserva: usa o horário explícito da
+    // Observação quando existir; caso contrário, usa o horário padrão do
+    // período (Turno). Se a Observação tiver só o início, o fim do período
+    // é mantido como referência.
+    function resolveHorario(res) {
+      const base = turnoToHorario(res.turno);
+      const override = extractHorarioFromObservacao(res.observacao);
+      if (override) {
+        return {
+          inicio: override.inicio || base.inicio,
+          fim: override.fim || base.fim,
+          fromObservacao: true
+        };
+      }
+      return { inicio: base.inicio, fim: base.fim, fromObservacao: false };
     }
 
     function periodoBadgeClass(turnoRaw) {
@@ -585,6 +657,10 @@
         const gCalUrl = getGoogleCalendarSingleUrl(res);
         const periodoLabel = turnoToPeriodoLabel(res.turno);
         const periodoClass = periodoBadgeClass(res.turno);
+        const horarioResolvido = resolveHorario(res);
+        const horarioBadge = horarioResolvido.fromObservacao
+          ? `<br><small class="text-primary" title="Horário identificado na Observação, será usado ao criar o evento"><i class="fa-solid fa-clock me-1"></i>${horarioResolvido.inicio.slice(0,5)}-${horarioResolvido.fim.slice(0,5)}</small>`
+          : '';
 
         const tr = document.createElement('tr');
         if (res.selected) tr.classList.add('tr-selected');
@@ -594,7 +670,7 @@
             <input type="checkbox" class="form-check-input" ${res.selected ? 'checked' : ''} onchange="toggleSelect(${res.id}, this.checked)">
           </td>
           <td><strong>${res.data}</strong></td>
-          <td><span class="badge-periodo ${periodoClass}">${periodoLabel}</span></td>
+          <td><span class="badge-periodo ${periodoClass}">${periodoLabel}</span>${horarioBadge}</td>
           <td><strong>${res.local}</strong></td>
           <td><small>${res.pessoa}</small></td>
           <td><small>${res.recurso}</small></td>
@@ -657,7 +733,7 @@
 
     function getGoogleCalendarSingleUrl(res) {
       const [d, m, y] = res.data.split('/');
-      const horario = turnoToHorario(res.turno);
+      const horario = resolveHorario(res);
       const hStart = formatTime(horario.inicio);
       const hEnd = formatTime(horario.fim);
 
@@ -690,7 +766,7 @@
 
       selected.forEach(res => {
         const [d, m, y] = res.data.split('/');
-        const horario = turnoToHorario(res.turno);
+        const horario = resolveHorario(res);
         const hStart = formatTime(horario.inicio);
         const hEnd = formatTime(horario.fim);
         const dtFormatted = `${y}${m}${d}`;
@@ -835,7 +911,7 @@
         document.getElementById('syncProgressBar').innerText = `${progressPct}%`;
 
         const [d, m, y] = res.data.split('/');
-        const horario = turnoToHorario(res.turno);
+        const horario = resolveHorario(res);
         const startIso = `${y}-${m}-${d}T${horario.inicio}`;
         const endIso = `${y}-${m}-${d}T${horario.fim}`;
 

@@ -63,12 +63,12 @@
 
   <div class="container mb-5">
     
-    <!-- Configurações da API do Google (Opcional) -->
+    <!-- Configurações da API do Google -->
     <div class="card card-custom p-3 mb-4">
       <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
         <div>
           <h5 class="card-title mb-1"><i class="fa-brands fa-google me-2 text-primary"></i>Conexão com o Google Agenda</h5>
-          <small class="text-muted">Insira seu <strong>Client ID</strong> do Google Cloud para sincronizar diretamente pela API ou use a exportação em <strong>.ICS</strong> (sem configuração).</small>
+          <small class="text-muted">Insira seu <strong>Client ID</strong> do Google Cloud para sincronizar diretamente ou utilize a exportação em <strong>.ICS</strong> (sem necessidade de chave).</small>
         </div>
         <div class="d-flex gap-2 align-items-center">
           <input type="text" id="clientIdInput" class="form-control form-control-sm" style="width: 280px;" placeholder="Seu Google Client ID (Opcional)">
@@ -154,7 +154,7 @@
 
   <!-- Biblioteca PDF.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <!-- Google API / Identity Services Client -->
+  <!-- Google API Client -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 
   <script>
@@ -165,7 +165,6 @@
     let tokenClient = null;
     let accessToken = null;
 
-    // Carrega Client ID salvo previamente no navegador
     document.addEventListener('DOMContentLoaded', () => {
       const savedClientId = localStorage.getItem('gcal_client_id');
       if (savedClientId) {
@@ -173,7 +172,6 @@
       }
     });
 
-    // Configuração de Drag & Drop
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
 
@@ -189,10 +187,10 @@
       if (e.target.files.length > 0) processPDF(e.target.files[0]);
     });
 
-    // Função Principal para LER o PDF
+    // Processamento Seguro do PDF
     async function processPDF(file) {
-      if (file.type !== 'application/pdf') {
-        alert('Por favor, selecione um arquivo no formato PDF.');
+      if (!file || file.type !== 'application/pdf') {
+        alert('Por favor, selecione um arquivo no formato PDF válido.');
         return;
       }
 
@@ -208,19 +206,21 @@
           const page = await pdf.getPage(i);
           const textContent = await page.getTextContent();
           
-          // Agrupa os elementos de texto por posição Y (linhas da página)
           const linesMap = {};
-          textContent.items.forEach(item => {
+          (textContent.items || []).forEach(item => {
+            if (!item || typeof item.str !== 'string') return;
             const y = Math.round(item.transform[5]);
             if (!linesMap[y]) linesMap[y] = [];
             linesMap[y].push(item);
           });
 
-          // Ordena linhas de cima para baixo
           const sortedYs = Object.keys(linesMap).map(Number).sort((a, b) => b - a);
           const pageText = sortedYs.map(y => {
-            // Ordena itens da linha da esquerda para a direita
-            return linesMap[y].sort((a, b) => a.transform[4] - b.transform[4]).map(i => i.str).join(' ');
+            return linesMap[y]
+              .sort((a, b) => a.transform[4] - b.transform[4])
+              .map(i => (i.str || '').trim())
+              .filter(s => s.length > 0)
+              .join(' ');
           }).join('\n');
 
           fullText += pageText + '\n';
@@ -229,7 +229,7 @@
         listReservas = parsePDFText(fullText);
         
         if (listReservas.length === 0) {
-          alert('Nenhuma reserva foi encontrada no arquivo PDF.');
+          alert('Nenhuma reserva pôde ser identificada no arquivo PDF.');
         } else {
           renderTable();
           document.getElementById('resultsSection').classList.remove('d-none');
@@ -237,38 +237,48 @@
 
       } catch (err) {
         console.error(err);
-        alert('Erro ao processar o arquivo PDF: ' + err.message);
+        alert('Erro ao processar o arquivo PDF: ' + (err?.message || err));
       } finally {
         document.getElementById('loadingSpinner').classList.add('d-none');
       }
     }
 
-    // Parser corrigido e robusto dos dados do Relatório
+    // Função de Extração Totalmente Protegida contra Valores Undefined
     function parsePDFText(text) {
+      if (!text || typeof text !== 'string') return [];
+
+      // Divide por blocos de reserva mantendo tolerância a variações do relatório
       const blocks = text.split(/(?:Dados da Reserva|Reserva nº|Reserva #)/gi);
       const rawBlocks = blocks.length > 1 ? blocks.slice(1) : [text];
       const reservas = [];
 
-      // Função auxiliar para extração de campos baseada em rótulos
+      // Helper ultra seguro para ler rótulos
       const getFieldValue = (blockStr, labelPattern) => {
+        if (!blockStr) return '';
         const nextLabels = '(?:Pessoa|Data|Hora|Bloco|Sala|Status|Descrição|Obs|Recurso|Patrimônio)';
         const regex = new RegExp(`${labelPattern}\\s*:?\\s*(.*?)(?=\\s+${nextLabels}\\s*:|$)`, 'i');
         const match = blockStr.match(regex);
-        return match ? match[1].trim() : '';
+        return (match && match[1]) ? match[1].trim() : '';
       };
 
       rawBlocks.forEach((block, idx) => {
-        const cleanBlock = block.replace(/\s+/g, ' ');
+        const cleanBlock = (block || '').replace(/\s+/g, ' ');
 
-        const data = getFieldValue(cleanBlock, 'Data(?: da reserva)?');
-        const horaInicio = getFieldValue(cleanBlock, 'Hora inicial');
-        const horaFim = getFieldValue(cleanBlock, 'Hora final');
-        const pessoa = getFieldValue(cleanBlock, 'Pessoa');
-        const blocoSala = getFieldValue(cleanBlock, 'Bloco\\/Sala|Bloco|Sala');
+        const data = getFieldValue(cleanBlock, 'Data(?: da reserva)?') || 
+                     (cleanBlock.match(/\b(\d{2}\/\d{2}\/20\d{2})\b/)?.[1] || '');
+                     
+        const horaInicio = getFieldValue(cleanBlock, 'Hora inicial') || 
+                          (cleanBlock.match(/\b(\d{2}:\d{2}(?::\d{2})?)\b/)?.[1] || '19:00:00');
+                          
+        const horaFim = getFieldValue(cleanBlock, 'Hora final') || '22:35:00';
+        
+        const pessoa = getFieldValue(cleanBlock, 'Pessoa') || 
+                       (cleanBlock.match(/\b\d{4,7}\s*-?\s*([A-ZÁÉÍÓÚÂÊÔÃÕÇ\s]{3,})/i)?.[0] || '');
+                       
+        const blocoSala = getFieldValue(cleanBlock, 'Bloco\\/Sala|Bloco|Sala') || 
+                          (cleanBlock.match(/(?:BLOCO|CENTRO DE CONVIVENCIA)[^Status|Pessoa|Hora|Data]+/i)?.[0] || '');
+
         let status = getFieldValue(cleanBlock, 'Status');
-        const descricao = getFieldValue(cleanBlock, 'Descrição');
-        const obs = getFieldValue(cleanBlock, 'Obs\\.|Obs\\. reserva|Observação');
-
         if (!status) {
           if (cleanBlock.includes('DEFERIDO')) status = 'DEFERIDO';
           else if (cleanBlock.includes('CANCELADO')) status = 'CANCELADO';
@@ -276,18 +286,21 @@
           else status = 'DEFERIDO';
         }
 
+        const descricao = getFieldValue(cleanBlock, 'Descrição|Reserva para Disciplina') || 'Reserva de Espaço';
+        const obs = getFieldValue(cleanBlock, 'Obs\\.|Obs\\. reserva|Observação');
+
         if (data || pessoa || blocoSala) {
           reservas.push({
             id: idx + 1,
-            data,
-            pessoa,
-            horaInicio,
-            horaFim,
-            blocoSala,
-            status: status.toUpperCase(),
-            descricao,
-            obs,
-            selected: status.toUpperCase() === 'DEFERIDO'
+            data: data || '',
+            pessoa: pessoa || 'Não informada',
+            horaInicio: horaInicio || '19:00:00',
+            horaFim: horaFim || '22:35:00',
+            blocoSala: blocoSala || 'Espaço Geral',
+            status: (status || 'DEFERIDO').toUpperCase(),
+            descricao: descricao || 'Reserva de Espaço',
+            obs: obs || '',
+            selected: (status || '').toUpperCase() === 'DEFERIDO'
           });
         }
       });
@@ -295,9 +308,8 @@
       return reservas;
     }
 
-    // Formata o horário garantindo o padrão HHMMSS para links e arquivos ICS
     function formatTime(timeStr, defaultTime) {
-      const t = timeStr || defaultTime;
+      const t = (timeStr || defaultTime || '').toString();
       const parts = t.split(':');
       const h = (parts[0] || '00').padStart(2, '0');
       const m = (parts[1] || '00').padStart(2, '0');
@@ -305,21 +317,20 @@
       return `${h}${m}${s}`;
     }
 
-    // Renderiza a Tabela de Resultados
     function renderTable() {
       const tbody = document.getElementById('reservasTableBody');
       tbody.innerHTML = '';
 
-      const searchTerm = document.getElementById('searchInput').value.toLowerCase();
-      const statusFilter = document.getElementById('statusFilter').value;
+      const searchTerm = (document.getElementById('searchInput')?.value || '').toLowerCase();
+      const statusFilter = document.getElementById('statusFilter')?.value || 'TODOS';
 
       let visibleCount = 0;
       let visibleSelectedCount = 0;
 
       listReservas.forEach(res => {
-        const matchesSearch = res.pessoa.toLowerCase().includes(searchTerm) ||
-                              res.blocoSala.toLowerCase().includes(searchTerm) ||
-                              res.descricao.toLowerCase().includes(searchTerm);
+        const matchesSearch = (res.pessoa || '').toLowerCase().includes(searchTerm) ||
+                              (res.blocoSala || '').toLowerCase().includes(searchTerm) ||
+                              (res.descricao || '').toLowerCase().includes(searchTerm);
         const matchesStatus = statusFilter === 'TODOS' || res.status === statusFilter;
 
         if (!matchesSearch || !matchesStatus) return;
@@ -338,10 +349,10 @@
           <td>
             <input type="checkbox" class="reserva-check" ${res.selected ? 'checked' : ''} onchange="toggleSelect(${res.id}, this.checked)">
           </td>
-          <td><strong>${res.data}</strong><br><small class="text-muted">${res.horaInicio || '19:00'} - ${res.horaFim || '22:35'}</small></td>
+          <td><strong>${res.data || '-'}</strong><br><small class="text-muted">${res.horaInicio} - ${res.horaFim}</small></td>
           <td><strong>${res.blocoSala || '-'}</strong></td>
           <td><small>${res.pessoa || '-'}</small></td>
-          <td><small>${res.descricao || '-'}${res.obs ? ' <br><em>Obs: ' + res.obs + '</em>' : ''}</small></td>
+          <td><small>${res.descricao || '-'}${res.obs ? '<br><em>Obs: ' + res.obs + '</em>' : ''}</small></td>
           <td><span class="badge ${badgeClass}">${res.status}</span></td>
           <td class="text-center">
             <a href="${googleLink}" target="_blank" class="btn btn-sm btn-outline-primary" title="Adicionar diretamente no Google Agenda">
@@ -367,13 +378,13 @@
     }
 
     function selectAll(check) {
-      const searchTerm = document.getElementById('searchInput').value.toLowerCase();
-      const statusFilter = document.getElementById('statusFilter').value;
+      const searchTerm = (document.getElementById('searchInput')?.value || '').toLowerCase();
+      const statusFilter = document.getElementById('statusFilter')?.value || 'TODOS';
 
       listReservas.forEach(res => {
-        const matchesSearch = res.pessoa.toLowerCase().includes(searchTerm) ||
-                              res.blocoSala.toLowerCase().includes(searchTerm) ||
-                              res.descricao.toLowerCase().includes(searchTerm);
+        const matchesSearch = (res.pessoa || '').toLowerCase().includes(searchTerm) ||
+                              (res.blocoSala || '').toLowerCase().includes(searchTerm) ||
+                              (res.descricao || '').toLowerCase().includes(searchTerm);
         const matchesStatus = statusFilter === 'TODOS' || res.status === statusFilter;
 
         if (matchesSearch && matchesStatus) {
@@ -384,7 +395,7 @@
     }
 
     function toggleSelectAllHeader(headerCheck) {
-      selectAll(headerCheck.checked);
+      selectAll(!!headerCheck?.checked);
     }
 
     function filterTable() {
@@ -393,11 +404,12 @@
 
     function updateSelectedCount() {
       const count = listReservas.filter(r => r.selected).length;
-      document.getElementById('selectedCount').innerText = count;
+      const elem = document.getElementById('selectedCount');
+      if (elem) elem.innerText = count;
     }
 
-    // Gerador de Link Único do Google Agenda
     function getGoogleCalendarSingleUrl(res) {
+      if (!res.data || typeof res.data !== 'string') return '#';
       const parts = res.data.split('/');
       if (parts.length !== 3) return '#';
       const [d, m, y] = parts;
@@ -406,14 +418,13 @@
       const hEnd = formatTime(res.horaFim, '22:35:00');
       
       const dates = `${y}${m.padStart(2,'0')}${d.padStart(2,'0')}T${hStart}/${y}${m.padStart(2,'0')}${d.padStart(2,'0')}T${hEnd}`;
-      const title = encodeURIComponent(`Reserva: ${res.blocoSala}`);
+      const title = encodeURIComponent(`Reserva: ${res.blocoSala || 'Espaço'}`);
       const details = encodeURIComponent(`Pessoa: ${res.pessoa}\nDescrição: ${res.descricao}\nObservação: ${res.obs}\nStatus: ${res.status}`);
-      const location = encodeURIComponent(res.blocoSala);
+      const location = encodeURIComponent(res.blocoSala || '');
 
       return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${dates}&details=${details}&location=${location}&ctz=America/Sao_Paulo`;
     }
 
-    // Exportação em Lote para Arquivo .ICS (Universal / Google Agenda)
     function downloadICS() {
       const selected = listReservas.filter(r => r.selected);
       if (selected.length === 0) {
@@ -430,6 +441,7 @@
       ];
 
       selected.forEach(res => {
+        if (!res.data) return;
         const parts = res.data.split('/');
         if (parts.length !== 3) return;
         const [d, m, y] = parts;
@@ -458,11 +470,10 @@
       link.click();
     }
 
-    // Sincronização direta via Google API
     function handleAuthClick() {
-      const clientId = document.getElementById('clientIdInput').value.trim();
+      const clientId = (document.getElementById('clientIdInput')?.value || '').trim();
       if (!clientId) {
-        alert('Insira o Client ID do Google Cloud Console para ativar a integração direta via API.');
+        alert('Insira o Client ID do Google Cloud Console para ativar a integração via API.');
         return;
       }
       localStorage.setItem('gcal_client_id', clientId);
@@ -476,7 +487,7 @@
             return;
           }
           accessToken = resp.access_token;
-          alert('Conectado com sucesso ao Google Agenda! Agora você pode cadastrar as reservas.');
+          alert('Conectado com sucesso ao Google Agenda! Você já pode cadastrar as reservas.');
         }
       });
       tokenClient.requestAccessToken({ prompt: 'consent' });
@@ -490,7 +501,7 @@
       }
 
       if (!accessToken) {
-        if (confirm('A autenticação com a API do Google não foi realizada. Deseja realizar a exportação em formato .ICS para importar no seu Google Agenda?')) {
+        if (confirm('A autenticação direta via API não está ativa. Deseja baixar o arquivo .ICS para importar no seu Google Agenda?')) {
           downloadICS();
         }
         return;
@@ -499,6 +510,7 @@
       let successCount = 0;
       for (const res of selected) {
         try {
+          if (!res.data) continue;
           const parts = res.data.split('/');
           if (parts.length !== 3) continue;
           const [d, m, y] = parts;
@@ -532,7 +544,7 @@
         }
       }
 
-      alert(`${successCount} de ${selected.length} reserva(s) foram cadastradas com sucesso no Google Agenda!`);
+      alert(`${successCount} de ${selected.length} reserva(s) foram cadastradas no Google Agenda!`);
     }
   </script>
 </body>

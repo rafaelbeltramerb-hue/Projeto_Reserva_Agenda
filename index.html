@@ -43,7 +43,7 @@
       margin-bottom: 1.5rem;
     }
     .table-container {
-      max-height: 600px;
+      max-height: 550px;
       overflow-y: auto;
       border: 1px solid #dee2e6;
       border-radius: 8px;
@@ -74,11 +74,14 @@
 <body>
 
   <!-- Cabeçalho -->
-  <header class="header-bg text-center">
+  <header class="header-bg text-center position-relative">
     <div class="container">
       <h2 class="fw-bold"><i class="fa-regular fa-calendar-check me-2"></i>Sincronizador de Reservas UNOESC</h2>
-      <p class="lead mb-0 fs-6">Carregue qualquer relatório PDF da universidade e selecione as reservas para o Google Agenda</p>
+      <p class="lead mb-0 fs-6">Agenda de Destino: <strong>Reservas Sistema Educare</strong> (ti.xxe@unoesc.edu.br)</p>
     </div>
+    <button class="btn btn-sm btn-light position-absolute top-0 end-0 m-3" onclick="openConfigModal()" title="Configurar Google OAuth Client ID">
+      <i class="fa-solid fa-gear me-1"></i>Configurar Google API
+    </button>
   </header>
 
   <div class="container-fluid px-4 mb-5">
@@ -156,8 +159,11 @@
           <strong id="selectedCount" class="text-primary fs-5">0</strong> de <span id="totalCount">0</span> reservas selecionadas
         </div>
         <div class="d-flex gap-2">
-          <button class="btn btn-success" onclick="downloadICS()">
-            <i class="fa-solid fa-file-arrow-down me-2"></i>Exportar Selecionadas (.ICS)
+          <button class="btn btn-outline-success" onclick="downloadICS()">
+            <i class="fa-solid fa-file-arrow-down me-2"></i>Exportar (.ICS)
+          </button>
+          <button class="btn btn-primary" onclick="syncToGoogleCalendar()">
+            <i class="fa-brands fa-google me-2"></i>Sincronizar no Google Agenda (API Direta)
           </button>
         </div>
       </div>
@@ -165,48 +171,104 @@
 
   </div>
 
-  <!-- Biblioteca PDF.js -->
+  <!-- Modal de Configuração do Client ID Google -->
+  <div class="modal fade" id="configModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="fa-brands fa-google text-danger me-2"></i>Configurar Google Cloud API</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <p class="small text-muted mb-2">Para inserir os eventos diretamente na agenda sem precisar baixar arquivos, você deve colar o seu <strong>OAuth 2.0 Client ID</strong> do Google Cloud Console.</p>
+          <div class="mb-3">
+            <label for="clientIdInput" class="form-label fw-bold">Google Client ID:</label>
+            <input type="text" id="clientIdInput" class="form-control form-control-sm" placeholder="ex: 123456789-abc...apps.googleusercontent.com">
+          </div>
+          <div class="alert alert-info p-2 small mb-0">
+            <strong>ID da Agenda Configurada:</strong><br>
+            <code>c_974543e8dd3e6da0c44e0165d1fd9ba627f1d520148d6e9c4e23f9c8a6996673@group.calendar.google.com</code>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+          <button type="button" class="btn btn-primary btn-sm" onclick="saveClientId()">Salvar Configuração</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de Progresso da Sincronização -->
+  <div class="modal fade" id="syncModal" data-bs-backdrop="static" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content text-center p-4">
+        <div class="modal-body">
+          <div id="syncSpinner" class="spinner-border text-primary mb-3" style="width: 3rem; height: 3rem;" role="status"></div>
+          <h5 id="syncTitle" class="fw-bold">Sincronizando com o Google Agenda...</h5>
+          <p id="syncStatus" class="text-muted small">Aguarde a autenticação...</p>
+          <div class="progress my-3" style="height: 20px;">
+            <div id="syncProgressBar" class="progress-bar progress-bar-striped progress-bar-animated bg-success" style="width: 0%">0%</div>
+          </div>
+          <button id="syncCloseBtn" class="btn btn-primary btn-sm mt-2 d-none" data-bs-dismiss="modal">Concluir</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bibliotecas PDF.js, Google GIS e Bootstrap -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
 
   <script>
-    // Configura o worker do PDF.js
+    const TARGET_CALENDAR_ID = 'c_974543e8dd3e6da0c44e0165d1fd9ba627f1d520148d6e9c4e23f9c8a6996673@group.calendar.google.com';
+
     if (typeof pdfjsLib !== 'undefined') {
       pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     }
 
     let listReservas = [];
+    let tokenClient = null;
+    let configModalInstance = null;
+    let syncModalInstance = null;
 
     document.addEventListener('DOMContentLoaded', () => {
+      configModalInstance = new bootstrap.Modal(document.getElementById('configModal'));
+      syncModalInstance = new bootstrap.Modal(document.getElementById('syncModal'));
+
       const dropZone = document.getElementById('dropZone');
       const fileInput = document.getElementById('fileInput');
 
-      dropZone.addEventListener('click', () => {
-        fileInput.click();
-      });
-
+      dropZone.addEventListener('click', () => fileInput.click());
       fileInput.addEventListener('change', (e) => {
-        if (e.target.files && e.target.files.length > 0) {
-          processPDF(e.target.files[0]);
-        }
+        if (e.target.files && e.target.files.length > 0) processPDF(e.target.files[0]);
       });
 
-      dropZone.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        dropZone.classList.add('dragover');
-      });
-
-      dropZone.addEventListener('dragleave', () => {
-        dropZone.classList.remove('dragover');
-      });
-
+      dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+      dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
       dropZone.addEventListener('drop', (e) => {
         e.preventDefault();
         dropZone.classList.remove('dragover');
-        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-          processPDF(e.dataTransfer.files[0]);
-        }
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) processPDF(e.dataTransfer.files[0]);
       });
     });
+
+    function openConfigModal() {
+      const savedId = localStorage.getItem('gcal_client_id') || '';
+      document.getElementById('clientIdInput').value = savedId;
+      configModalInstance.show();
+    }
+
+    function saveClientId() {
+      const idVal = document.getElementById('clientIdInput').value.trim();
+      if (!idVal) {
+        alert('Por favor, informe um Client ID válido.');
+        return;
+      }
+      localStorage.setItem('gcal_client_id', idVal);
+      configModalInstance.hide();
+      alert('Client ID salvo com sucesso!');
+    }
 
     async function processPDF(file) {
       if (!file || file.type !== 'application/pdf') {
@@ -336,7 +398,7 @@
         }
 
         let recurso = local;
-        const recMatch = block.match(/Recurso\s+Quantidade[^\n]*\n+([^\n]+)/i) || block.match(/Descrição:\s*([^\n]+)/i);
+        const recMatch = block.match(/Recurso\s+Quantidade[^\n]*\n+([^\n]+)/i) || block.match/Descrição:\s*([^\n]+)/i;
         if (recMatch) {
           recurso = recMatch[1].replace(/\s+\d+\s*$/, '').trim();
         }
@@ -511,6 +573,102 @@
       link.href = window.URL.createObjectURL(blob);
       link.download = `Reservas_Selecionadas_UNOESC.ics`;
       link.click();
+    }
+
+    // --- LÓGICA DA API DO GOOGLE AGENDA (SINCRONIZAÇÃO EM LOTE) ---
+    function syncToGoogleCalendar() {
+      const clientId = localStorage.getItem('gcal_client_id');
+      if (!clientId) {
+        openConfigModal();
+        return;
+      }
+
+      const selected = listReservas.filter(r => r.selected);
+      if (selected.length === 0) {
+        alert('Selecione pelo menos uma reserva na lista para sincronizar.');
+        return;
+      }
+
+      // Prepara interface do Modal de Progresso
+      document.getElementById('syncSpinner').classList.remove('d-none');
+      document.getElementById('syncTitle').innerText = 'Autenticando no Google...';
+      document.getElementById('syncStatus').innerText = 'Aguarde a confirmação na janela popup do Google.';
+      document.getElementById('syncProgressBar').style.width = '0%';
+      document.getElementById('syncProgressBar').innerText = '0%';
+      document.getElementById('syncCloseBtn').classList.add('d-none');
+      syncModalInstance.show();
+
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: 'https://www.googleapis.com/auth/calendar.events',
+        callback: async (tokenResponse) => {
+          if (tokenResponse.error) {
+            document.getElementById('syncSpinner').classList.add('d-none');
+            document.getElementById('syncTitle').innerText = 'Falha na Autenticação';
+            document.getElementById('syncStatus').innerText = tokenResponse.error_description || tokenResponse.error;
+            document.getElementById('syncCloseBtn').classList.remove('d-none');
+            return;
+          }
+
+          await batchUploadEvents(tokenResponse.access_token, selected);
+        },
+      });
+
+      tokenClient.requestAccessToken({ prompt: 'consent' });
+    }
+
+    async function batchUploadEvents(accessToken, selectedList) {
+      document.getElementById('syncTitle').innerText = 'Enviando Reservas...';
+      let successCount = 0;
+      let failCount = 0;
+
+      for (let i = 0; i < selectedList.length; i++) {
+        const res = selectedList[i];
+        const progressPct = Math.round(((i + 1) / selectedList.length) * 100);
+
+        document.getElementById('syncStatus').innerText = `Enviando item ${i + 1} de ${selectedList.length}: ${res.local}`;
+        document.getElementById('syncProgressBar').style.width = `${progressPct}%`;
+        document.getElementById('syncProgressBar').innerText = `${progressPct}%`;
+
+        const [d, m, y] = res.data.split('/');
+        const startIso = `${y}-${m}-${d}T${res.horaInicio}`;
+        const endIso = `${y}-${m}-${d}T${res.horaFim}`;
+
+        const eventData = {
+          summary: `Reserva: ${res.local}`,
+          location: res.local,
+          description: `Solicitante: ${res.pessoa}\nDisciplina: ${res.disciplina}\nRecurso: ${res.recurso}\nStatus: ${res.status}`,
+          start: { dateTime: startIso, timeZone: 'America/Sao_Paulo' },
+          end: { dateTime: endIso, timeZone: 'America/Sao_Paulo' }
+        };
+
+        try {
+          const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(TARGET_CALENDAR_ID)}/events`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(eventData)
+          });
+
+          if (resp.ok) {
+            successCount++;
+          } else {
+            failCount++;
+            const errJson = await resp.json();
+            console.error('Erro na resposta da API Google:', errJson);
+          }
+        } catch (err) {
+          failCount++;
+          console.error('Erro de requisição:', err);
+        }
+      }
+
+      document.getElementById('syncSpinner').classList.add('d-none');
+      document.getElementById('syncTitle').innerText = 'Sincronização Concluída!';
+      document.getElementById('syncStatus').innerHTML = `<strong class="text-success">${successCount} eventos criados com sucesso!</strong>${failCount > 0 ? `<br><span class="text-danger">${failCount} falharam.</span>` : ''}`;
+      document.getElementById('syncCloseBtn').classList.remove('d-none');
     }
   </script>
 </body>

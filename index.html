@@ -123,6 +123,20 @@
       </div>
     </div>
 
+    <!-- Opção 1: Exibição do Texto Bruto Extraído (Debug / Diagnóstico) -->
+    <div id="debugSection" class="card card-custom p-3 d-none">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h6 class="fw-bold mb-0 text-secondary">
+          <i class="fa-solid fa-bug me-2 text-warning"></i>Texto Bruto Extraído do PDF (Opção 1 - Diagnóstico)
+        </h6>
+        <button class="btn btn-sm btn-outline-primary" onclick="copyRawText()">
+          <i class="fa-regular fa-copy me-1"></i>Copiar Texto Bruto
+        </button>
+      </div>
+      <small class="text-muted mb-2 d-block">Copie o conteúdo abaixo e envie no chat para ajustarmos os seletores com 100% de precisão:</small>
+      <textarea id="rawTextArea" class="form-control font-monospace" rows="6" readonly style="font-size: 0.78rem; background-color: #f8f9fa; color: #333;"></textarea>
+    </div>
+
     <!-- Seção de Resultados / Tabela de Reservas -->
     <div id="resultsSection" class="card card-custom p-4 d-none">
       
@@ -226,6 +240,7 @@
 
       document.getElementById('loadingSpinner').classList.remove('d-none');
       document.getElementById('resultsSection').classList.add('d-none');
+      document.getElementById('debugSection').classList.add('d-none');
 
       try {
         const arrayBuffer = await file.arrayBuffer();
@@ -263,10 +278,20 @@
           fullText += pageText + '\n\n';
         }
 
+        // =========================================================
+        // OPÇÃO 1: IMPRESSÃO NO CONSOLE E PAINEL DE DIAGNÓSTICO
+        // =========================================================
+        console.log("=== TEXTO EXTRAÍDO DO PDF (OPÇÃO 1) ===");
+        console.log(fullText);
+        console.log("======================================");
+
+        document.getElementById('rawTextArea').value = fullText;
+        document.getElementById('debugSection').classList.remove('d-none');
+
         listReservas = parsePDFText(fullText);
         
         if (listReservas.length === 0) {
-          alert('Nenhuma reserva pôde ser identificada no arquivo PDF.');
+          alert('Nenhuma reserva pôde ser identificada no arquivo PDF. Verifique o quadro de Texto Bruto para análise.');
         } else {
           renderTable();
           document.getElementById('resultsSection').classList.remove('d-none');
@@ -278,6 +303,14 @@
       } finally {
         document.getElementById('loadingSpinner').classList.add('d-none');
       }
+    }
+
+    function copyRawText() {
+      const copyText = document.getElementById("rawTextArea");
+      copyText.select();
+      copyText.setSelectionRange(0, 99999);
+      navigator.clipboard.writeText(copyText.value);
+      alert("Texto bruto copiado para a área de transferência!");
     }
 
     function sanitizePDFText(text) {
@@ -307,9 +340,9 @@
       rawBlocks.forEach((block) => {
         if (!block.trim()) return;
 
-        // 1. Data e Horários (Data da reserva + Hora inicial - Hora final)
+        // 1. Data e Horários
         const dateMatch = block.match(/Data\s+(?:da\s+reserva)?:\s*(\d{2}\/\d{2}\/\d{4})/i) || block.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
-        if (!dateMatch) return; // Se não tem data, ignora o bloco
+        if (!dateMatch) return;
 
         const data = dateMatch[1];
 
@@ -324,7 +357,7 @@
         if (horaInicio.length === 5) horaInicio += ':00';
         if (horaFim.length === 5) horaFim += ':00';
 
-        // 2. Pessoa / Solicitante: texto imediatamente após "Pessoa:" e antes de "Data da reserva:"
+        // 2. Pessoa / Solicitante
         let pessoa = '';
         const pMatch = block.match(/Pessoa:\s*([\s\S]*?)(?=Data\s+da\s+reserva:|Data\s+reserva:|Hora\s+inicial|Bloco\/Sala|Status:|$)/i);
         if (pMatch) {
@@ -338,7 +371,7 @@
         pessoa = pessoa.replace(/Data\s+(da\s+)?reserva:.*$/i, '').trim();
         if (!pessoa) pessoa = 'Não informada';
 
-        // 3. Local: texto após "Bloco/Sala:" e antes de "Status:" ou "Descrição:"
+        // 3. Local (Bloco / Sala)
         let local = '';
         const lMatch = block.match(/Bloco\/Sala:\s*([\s\S]*?)(?=Status:|Descrição:|Obs|Recurso:|$)/i);
         if (lMatch) {
@@ -349,7 +382,7 @@
         }
         if (!local) local = 'Espaço Geral';
 
-        // 4. Recurso: extrair valor contido na tabela inferior do bloco (abaixo do cabeçalho Recurso)
+        // 4. Recurso
         let recurso = '';
         const recMatch = block.match(/Recurso(?:\(s\))?[:\s\n]+([^|\n]+?)(?=\s*(?:\n|Quantidade|Patrimônio|Status|\||$))/i);
         if (recMatch) {
@@ -370,7 +403,7 @@
           recurso = local;
         }
 
-        // 5. Disciplina: isolar via Regex o trecho contido no campo Descrição (ex.: /\d+\s*-\s*[\w\s]+/)
+        // 5. Disciplina
         let disciplina = '-';
         const discMatch = block.match(/(?:Reserva\s+para\s+Disciplina|Disciplina)[:\s]*(\d+\s*[-–]\s*[\w\sÁÉÍÓÚÂÊÔÃÕÇáéíóúâêôãõçÀ-ÿ]+)/i);
         if (discMatch) {

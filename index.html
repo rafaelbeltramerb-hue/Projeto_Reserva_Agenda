@@ -43,29 +43,30 @@
       margin-bottom: 1.5rem;
     }
     .table-container {
-      max-height: 550px;
+      max-height: 600px;
       overflow-y: auto;
       border: 1px solid #dee2e6;
       border-radius: 8px;
     }
     .table-custom {
       width: 100%;
-      table-layout: fixed;
       margin-bottom: 0;
     }
     .table-custom th, .table-custom td {
       vertical-align: middle;
       word-wrap: break-word;
       white-space: normal;
-      font-size: 0.875rem;
+      font-size: 0.85rem;
     }
-    .col-check { width: 40px; }
-    .col-data { width: 140px; }
-    .col-local { width: 220px; }
-    .col-pessoa { width: 200px; }
+    .col-check { width: 35px; }
+    .col-data { width: 125px; }
+    .col-local { width: 150px; }
+    .col-recurso { width: 140px; }
+    .col-pessoa { width: 150px; }
+    .col-disciplina { width: 170px; }
     .col-desc { width: auto; }
-    .col-status { width: 130px; }
-    .col-acao { width: 60px; }
+    .col-status { width: 115px; }
+    .col-acao { width: 50px; }
 
     .badge-status {
       font-size: 0.75rem;
@@ -90,7 +91,7 @@
     </div>
   </header>
 
-  <div class="container mb-5">
+  <div class="container-fluid px-4 mb-5">
     
     <!-- Configurações da API do Google -->
     <div class="card card-custom p-3 mb-4">
@@ -128,7 +129,7 @@
       <!-- Barra de Controle e Filtros -->
       <div class="row align-items-center mb-3 g-2">
         <div class="col-md-4">
-          <input type="text" id="searchInput" class="form-control" placeholder="Buscar por pessoa, sala ou disciplina..." oninput="filterTable()">
+          <input type="text" id="searchInput" class="form-control" placeholder="Buscar por pessoa, local, recurso ou disciplina..." oninput="filterTable()">
         </div>
         <div class="col-md-3">
           <select id="statusFilter" class="form-select" onchange="filterTable()">
@@ -151,9 +152,11 @@
             <tr>
               <th class="col-check"><input type="checkbox" id="checkAllHeader" onclick="toggleSelectAllHeader(this)"></th>
               <th class="col-data">Data / Horário</th>
-              <th class="col-local">Local / Recurso</th>
+              <th class="col-local">Local</th>
+              <th class="col-recurso">Recurso</th>
               <th class="col-pessoa">Pessoa / Solicitante</th>
-              <th class="col-desc">Descrição / Disciplina</th>
+              <th class="col-disciplina">Disciplina</th>
+              <th class="col-desc">Descrição / Obs</th>
               <th class="col-status">Status</th>
               <th class="col-acao text-center">Ação</th>
             </tr>
@@ -233,19 +236,23 @@
           const page = await pdf.getPage(i);
           const textContent = await page.getTextContent();
           
-          // Agrupa elementos de texto pela coordenada Y considerando pequenas variações (3px)
+          const items = (textContent.items || []).map(item => ({
+            str: item.str,
+            x: item.transform[4],
+            y: item.transform[5]
+          }));
+          
+          // Agrupa elementos de texto pela coordenada Y considerando pequenas variações (4px)
           const lines = [];
-          (textContent.items || []).forEach(item => {
+          items.forEach(item => {
             if (!item || typeof item.str !== 'string' || !item.str.trim()) return;
-            const y = item.transform[5];
-            const x = item.transform[4];
             
-            let foundLine = lines.find(l => Math.abs(l.y - y) < 3);
+            let foundLine = lines.find(l => Math.abs(l.y - item.y) < 4);
             if (!foundLine) {
-              foundLine = { y: y, items: [] };
+              foundLine = { y: item.y, items: [] };
               lines.push(foundLine);
             }
-            foundLine.items.push({ x: x, str: item.str });
+            foundLine.items.push(item);
           });
 
           // Ordena linhas de cima para baixo e itens da esquerda para a direita
@@ -255,7 +262,7 @@
             return line.items.map(i => i.str.trim()).join(' ');
           }).join('\n');
 
-          fullText += pageText + '\n';
+          fullText += pageText + '\n\n';
         }
 
         listReservas = parsePDFText(fullText);
@@ -291,10 +298,10 @@
 
       const cleanText = sanitizePDFText(rawText);
 
-      // Divisão precisa utilizando a palavra Pessoa/Solicitante como marcador de início de bloco
-      let rawBlocks = cleanText.split(/(?=(?:Pessoa|Solicitante):\s*)/gi);
+      // Divisão precisa utilizando "Dados da Reserva" como delimitador principal de bloco
+      let rawBlocks = cleanText.split(/(?=Dados da Reserva)/gi);
       if (rawBlocks.length <= 1) {
-        rawBlocks = cleanText.split(/(?=(?:Data\s+(?:da\s+reserva)?:\s*\d{2}\/\d{2}\/\d{4}))/gi);
+        rawBlocks = cleanText.split(/(?=(?:Pessoa|Solicitante):\s*)/gi);
       }
 
       const reservas = [];
@@ -306,21 +313,20 @@
 
         const data = dateMatch[1];
 
-        // Pessoa / Solicitante
+        // 1. Pessoa / Solicitante
         let pessoa = '';
-        const pMatch = block.match(/(?:Pessoa|Solicitante):\s*([^:\n]+?)(?=\s+Dados|\s+Data|\n|$)/i);
+        const pMatch = block.match(/(?:Pessoa|Solicitante):\s*([^\n]+)/i);
         if (pMatch) {
-          pessoa = pMatch[1].trim();
+          pessoa = pMatch[1].replace(/\s+(Dados|Data|Hora|Bloco|Status|Descrição|Recurso).*$/i, '').trim();
         } else {
           const pCand = block.match(/\b(\d{4,7}\s*[-–]\s*[A-ZÁÉÍÓÚÂÊÔÃÕÇ\s]{3,})\b/);
           if (pCand && !/Disciplina|Curso|Reserva/i.test(pCand[1])) {
             pessoa = pCand[1].trim();
           }
         }
-        pessoa = pessoa.replace(/\s+(Dados|Data|Hora|Bloco|Status|Descrição|Recurso).*$/i, '').trim();
         if (!pessoa) pessoa = 'Não informada';
 
-        // Horários
+        // 2. Horários
         let horaInicio = '19:00:00';
         let horaFim = '22:35:00';
         const hIniMatch = block.match(/Hora\s+inicial:\s*(\d{2}:\d{2}(?::\d{2})?)/i);
@@ -332,7 +338,7 @@
         if (horaInicio.length === 5) horaInicio += ':00';
         if (horaFim.length === 5) horaFim += ':00';
 
-        // Status
+        // 3. Status
         let status = 'DEFERIDO';
         if (/\bCANCELADO\b/i.test(block)) {
           status = 'CANCELADO';
@@ -342,25 +348,62 @@
           status = 'DEFERIDO';
         }
 
-        // Bloco e Sala
-        let blocoSala = '';
-        const bMatch = block.match(/Bloco\/Sala:\s*([^:\n]+?)(?=\s+Status:|\s+Descrição:|\n|$)/i);
-        if (bMatch) {
-          blocoSala = bMatch[1].trim();
+        // 4. Local (Bloco / Sala)
+        let local = '';
+        const lMatch = block.match(/Bloco\/Sala:\s*([^\n]+)/i);
+        if (lMatch) {
+          local = lMatch[1].replace(/\s+(Status|Descrição|Pessoa|Data|Hora|Recurso).*$/i, '').trim();
         } else {
-          const bCand = block.match(/\b((?:BLOCO|CENTRO|AUDITORIO|LAB|LABORATORIO)\s+[A-Z0-9/\s\-_]+?)(?=\s+Status|\s+Descrição|\n|$)/i);
-          if (bCand) blocoSala = bCand[1].trim();
+          const lCand = block.match(/\b((?:BLOCO|CENTRO|AUDITORIO|LAB|LABORATORIO)\s+[^\n]+)/i);
+          if (lCand) local = lCand[1].split(/(Status|Descrição|Pessoa|Data|Hora|Recurso)/i)[0].trim();
         }
-        blocoSala = blocoSala.replace(/\s+(Status|Descrição|Pessoa|Data|Hora).*$/i, '').trim();
-        if (!blocoSala) blocoSala = 'Espaço Geral';
+        if (!local) local = 'Espaço Geral';
 
-        // Descrição / Disciplina
-        let descricao = 'Reserva de Espaço';
-        const descMatch = block.match(/(?:Reserva para Disciplina|Descrição|Disciplina):\s*([^:\n]+?)(?=\s+Recurso|\n|$)/i);
-        if (descMatch) {
-          descricao = descMatch[1].trim();
+        // 5. Recurso
+        let recurso = '';
+        const recMatchLines = block.match(/Recurso\s*\n+\s*([^|\n]+?)(?=\s*\n|\s+Quantidade|\s+\|\s*Quantidade)/i);
+        if (recMatchLines && !/Quantidade|Patrimônio|Status/i.test(recMatchLines[1])) {
+          recurso = recMatchLines[1].trim();
         }
-        descricao = descricao.replace(/\s+(Recurso|Quantidade|Patrimônios|Patrimônio).*$/i, '').trim();
+
+        if (!recurso) {
+          const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
+          const recIdx = lines.findIndex(l => /^Recurso\b/i.test(l));
+          if (recIdx !== -1 && recIdx + 1 < lines.length) {
+            const candidate = lines[recIdx + 1].replace(/^[\s|]+/, '').trim();
+            if (!/Quantidade|Patrimônio|Data|Hora|Status/i.test(candidate)) {
+              recurso = candidate;
+            }
+          }
+        }
+
+        if (!recurso) {
+          const recMatchCol = block.match(/Recurso[:\s]+([^\n]+)/i);
+          if (recMatchCol) {
+            recurso = recMatchCol[1].split(/(Quantidade|Patrimô|Data|Hora)/i)[0].trim();
+          }
+        }
+        recurso = recurso.replace(/^[\s|]+|[\s|]+$/g, '').trim();
+        if (!recurso || recurso === '|') recurso = local;
+
+        // 6. Disciplina
+        let disciplina = '-';
+        const discMatch = block.match(/(?:Reserva para Disciplina|Disciplina):\s*([^\n]+)/i);
+        if (discMatch) {
+          disciplina = discMatch[1].replace(/\s+(Hora|Status|Obs|Recurso|Quantidade).*$/i, '').trim();
+        }
+
+        // 7. Descrição / Obs. Reserva
+        let descricao = '-';
+        const obsMatch = block.match(/Obs\.\s*reserva:\s*([^\n]+)/i);
+        if (obsMatch) {
+          descricao = obsMatch[1].replace(/\s+(Recurso|Quantidade|Hora|Status).*$/i, '').trim();
+        } else {
+          const descMatch = block.match(/Descrição:\s*([^\n]+)/i);
+          if (descMatch && !descMatch[1].includes('Reserva para Disciplina')) {
+            descricao = descMatch[1].replace(/\s+(Hora|Status|Obs|Recurso).*$/i, '').trim();
+          }
+        }
 
         reservas.push({
           id: reservas.length + 1,
@@ -368,9 +411,11 @@
           pessoa: pessoa,
           horaInicio: horaInicio,
           horaFim: horaFim,
-          blocoSala: blocoSala,
-          status: status,
+          local: local,
+          recurso: recurso,
+          disciplina: disciplina,
           descricao: descricao,
+          status: status,
           selected: status === 'DEFERIDO'
         });
       });
@@ -399,7 +444,9 @@
 
       listReservas.forEach(res => {
         const matchesSearch = (res.pessoa || '').toLowerCase().includes(searchTerm) ||
-                              (res.blocoSala || '').toLowerCase().includes(searchTerm) ||
+                              (res.local || '').toLowerCase().includes(searchTerm) ||
+                              (res.recurso || '').toLowerCase().includes(searchTerm) ||
+                              (res.disciplina || '').toLowerCase().includes(searchTerm) ||
                               (res.descricao || '').toLowerCase().includes(searchTerm);
         const matchesStatus = statusFilter === 'TODOS' || res.status === statusFilter;
 
@@ -423,9 +470,11 @@
             <strong>${res.data}</strong><br>
             <small class="text-muted">${res.horaInicio.slice(0,5)} - ${res.horaFim.slice(0,5)}</small>
           </td>
-          <td class="col-local"><strong>${res.blocoSala}</strong></td>
+          <td class="col-local"><strong>${res.local}</strong></td>
+          <td class="col-recurso"><small class="fw-semibold text-secondary">${res.recurso}</small></td>
           <td class="col-pessoa"><small>${res.pessoa}</small></td>
-          <td class="col-desc"><small>${res.descricao}</small></td>
+          <td class="col-disciplina"><small>${res.disciplina}</small></td>
+          <td class="col-desc"><small class="text-muted">${res.descricao}</small></td>
           <td class="col-status"><span class="badge-status ${badgeClass}">${res.status}</span></td>
           <td class="col-acao text-center">
             <a href="${googleLink}" target="_blank" class="btn btn-sm btn-outline-primary" title="Adicionar no Google Agenda">
@@ -454,7 +503,9 @@
       const statusFilter = document.getElementById('statusFilter')?.value || 'DEFERIDO';
       const visible = listReservas.filter(r => {
         const matchesSearch = (r.pessoa || '').toLowerCase().includes(searchTerm) ||
-                              (r.blocoSala || '').toLowerCase().includes(searchTerm) ||
+                              (r.local || '').toLowerCase().includes(searchTerm) ||
+                              (r.recurso || '').toLowerCase().includes(searchTerm) ||
+                              (r.disciplina || '').toLowerCase().includes(searchTerm) ||
                               (r.descricao || '').toLowerCase().includes(searchTerm);
         const matchesStatus = statusFilter === 'TODOS' || r.status === statusFilter;
         return matchesSearch && matchesStatus;
@@ -472,7 +523,9 @@
 
       listReservas.forEach(res => {
         const matchesSearch = (res.pessoa || '').toLowerCase().includes(searchTerm) ||
-                              (res.blocoSala || '').toLowerCase().includes(searchTerm) ||
+                              (res.local || '').toLowerCase().includes(searchTerm) ||
+                              (res.recurso || '').toLowerCase().includes(searchTerm) ||
+                              (res.disciplina || '').toLowerCase().includes(searchTerm) ||
                               (res.descricao || '').toLowerCase().includes(searchTerm);
         const matchesStatus = statusFilter === 'TODOS' || res.status === statusFilter;
 
@@ -507,9 +560,9 @@
       const hEnd = formatTime(res.horaFim, '22:35:00');
       
       const dates = `${y}${m.padStart(2,'0')}${d.padStart(2,'0')}T${hStart}/${y}${m.padStart(2,'0')}${d.padStart(2,'0')}T${hEnd}`;
-      const title = encodeURIComponent(`Reserva: ${res.blocoSala || 'Espaço'}`);
-      const details = encodeURIComponent(`Pessoa: ${res.pessoa}\nDescrição: ${res.descricao}\nStatus: ${res.status}`);
-      const location = encodeURIComponent(res.blocoSala || '');
+      const title = encodeURIComponent(`Reserva: ${res.local || 'Espaço'}`);
+      const details = encodeURIComponent(`Pessoa: ${res.pessoa}\nRecurso: ${res.recurso}\nDisciplina: ${res.disciplina}\nDescrição: ${res.descricao}\nStatus: ${res.status}`);
+      const location = encodeURIComponent(res.local || '');
 
       return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${dates}&details=${details}&location=${location}&ctz=America/Sao_Paulo`;
     }
@@ -544,9 +597,9 @@
         icsLines.push(`DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}Z`);
         icsLines.push(`DTSTART;TZID=America/Sao_Paulo:${dtFormatted}T${hStart}`);
         icsLines.push(`DTEND;TZID=America/Sao_Paulo:${dtFormatted}T${hEnd}`);
-        icsLines.push(`SUMMARY:Reserva - ${res.blocoSala}`);
-        icsLines.push(`LOCATION:${res.blocoSala}`);
-        icsLines.push(`DESCRIPTION:Pessoa: ${res.pessoa}\\nDescrição: ${res.descricao}\\nStatus: ${res.status}`);
+        icsLines.push(`SUMMARY:Reserva - ${res.local}`);
+        icsLines.push(`LOCATION:${res.local}`);
+        icsLines.push(`DESCRIPTION:Pessoa: ${res.pessoa}\\nRecurso: ${res.recurso}\\nDisciplina: ${res.disciplina}\\nDescrição: ${res.descricao}\\nStatus: ${res.status}`);
         icsLines.push('END:VEVENT');
       });
 
@@ -611,9 +664,9 @@
           const endIso = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}T${hEnd.slice(0,2)}:${hEnd.slice(2,4)}:${hEnd.slice(4,6)}`;
 
           const event = {
-            summary: `Reserva: ${res.blocoSala}`,
-            location: res.blocoSala,
-            description: `Pessoa: ${res.pessoa}\nDescrição: ${res.descricao}\nStatus: ${res.status}`,
+            summary: `Reserva: ${res.local}`,
+            location: res.local,
+            description: `Pessoa: ${res.pessoa}\nRecurso: ${res.recurso}\nDisciplina: ${res.disciplina}\nDescrição: ${res.descricao}\nStatus: ${res.status}`,
             start: { dateTime: startIso, timeZone: 'America/Sao_Paulo' },
             end: { dateTime: endIso, timeZone: 'America/Sao_Paulo' }
           };

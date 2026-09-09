@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sistema de Reservas -> Google Agenda</title>
+  
+  <!-- Bootstrap 5 CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <style>
+    body {
+      background-color: #f4f6f9;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    .header-bg {
+      background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%);
+      color: white;
+      padding: 2rem 0;
+      margin-bottom: 2rem;
+      border-radius: 0 0 15px 15px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    .drop-zone {
+      border: 2px dashed #0d6efd;
+      border-radius: 10px;
+      background-color: #ffffff;
+      padding: 2.5rem;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+    .drop-zone:hover, .drop-zone.dragover {
+      background-color: #e7f1ff;
+      border-color: #0a58ca;
+    }
+    .card-custom {
+      border: none;
+      border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+      margin-bottom: 1.5rem;
+    }
+    .table-container {
+      max-height: 550px;
+      overflow-y: auto;
+    }
+    .badge-deferido { background-color: #198754; }
+    .badge-cancelado { background-color: #dc3545; }
+    .badge-aguardando { background-color: #ffc107; color: #000; }
+  </style>
+</head>
+<body>
+
+  <!-- Cabeçalho -->
+  <header class="header-bg text-center">
+    <div class="container">
+      <h1 class="fw-bold"><i class="fa-regular fa-calendar-check me-2"></i>Importador de Reservas para Google Agenda</h1>
+      <p class="lead mb-0">Anexe o relatório PDF da universidade e sincronize suas reservas com facilidade</p>
+    </div>
+  </header>
+
+  <div class="container mb-5">
+    
+    <!-- Configurações da API do Google (Opcional) -->
+    <div class="card card-custom p-3 mb-4">
+      <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <div>
+          <h5 class="card-title mb-1"><i class="fa-brands fa-google me-2 text-primary"></i>Conexão com o Google Agenda</h5>
+          <small class="text-muted">Insira seu <strong>Client ID</strong> do Google Cloud para sincronizar diretamente pela API ou use a exportação em <strong>.ICS</strong> (sem configuração).</small>
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+          <input type="text" id="clientIdInput" class="form-control form-control-sm" style="width: 280px;" placeholder="Seu Google Client ID (Opcional)">
+          <button id="btnAuth" class="btn btn-outline-primary btn-sm" onclick="handleAuthClick()">
+            <i class="fa-solid fa-key me-1"></i>Conectar
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Área de Upload do PDF -->
+    <div class="card card-custom p-4">
+      <div id="dropZone" class="drop-zone">
+        <i class="fa-solid fa-file-pdf fa-3x text-primary mb-3"></i>
+        <h4>Arraste e solte o PDF do relatório aqui</h4>
+        <p class="text-muted">ou clique para selecionar o arquivo no seu computador</p>
+        <input type="file" id="fileInput" accept="application/pdf" class="d-none">
+      </div>
+      <div id="loadingSpinner" class="text-center my-4 d-none">
+        <div class="spinner-border text-primary" role="status"></div>
+        <p class="mt-2 text-muted">Lendo e extraindo dados do relatório PDF...</p>
+      </div>
+    </div>
+
+    <!-- Seção de Resultados / Tabela de Reservas -->
+    <div id="resultsSection" class="card card-custom p-4 d-none">
+      
+      <!-- Barra de Controle e Filtros -->
+      <div class="row align-items-center mb-3 g-2">
+        <div class="col-md-4">
+          <input type="text" id="searchInput" class="form-control" placeholder="Buscar por pessoa, sala ou disciplina..." oninput="filterTable()">
+        </div>
+        <div class="col-md-3">
+          <select id="statusFilter" class="form-select" onchange="filterTable()">
+            <option value="TODOS">Todos os Status</option>
+            <option value="DEFERIDO" selected>Somente DEFERIDO</option>
+            <option value="CANCELADO">Somente CANCELADO</option>
+            <option value="AGUARDANDO ATENDIMENTO">Aguardando Atendimento</option>
+          </select>
+        </div>
+        <div class="col-md-5 text-end">
+          <button class="btn btn-sm btn-outline-secondary me-1" onclick="selectAll(true)">Selecionar Visíveis</button>
+          <button class="btn btn-sm btn-outline-secondary me-2" onclick="selectAll(false)">Desmarcar Todos</button>
+        </div>
+      </div>
+
+      <!-- Tabela -->
+      <div class="table-responsive table-container">
+        <table class="table table-hover align-middle">
+          <thead class="table-light sticky-top">
+            <tr>
+              <th width="40"><input type="checkbox" id="checkAllHeader" onclick="toggleSelectAllHeader(this)"></th>
+              <th>Data / Horário</th>
+              <th>Local / Recurso</th>
+              <th>Pessoa / Solicitante</th>
+              <th>Descrição / Disciplina</th>
+              <th>Status</th>
+              <th text-align="center">Ação</th>
+            </tr>
+          </thead>
+          <tbody id="reservasTableBody">
+            <!-- Linhas geradas via JavaScript -->
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Ações Principais -->
+      <div class="d-flex justify-content-between align-items-center mt-4 pt-3 border-top flex-wrap gap-2">
+        <span class="text-muted"><strong id="selectedCount">0</strong> reserva(s) selecionada(s)</span>
+        <div class="d-flex gap-2">
+          <button class="btn btn-success" onclick="downloadICS()">
+            <i class="fa-solid fa-file-arrow-down me-2"></i>Exportar Selecionadas (.ICS)
+          </button>
+          <button class="btn btn-primary" onclick="syncWithGoogleCalendar()">
+            <i class="fa-brands fa-google me-2"></i>Cadastrar no Google Agenda
+          </button>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+
+  <!-- Biblioteca PDF.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <!-- Google API / Identity Services Client -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+
+  <script>
+    // Configura o worker do PDF.js
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    let listReservas = [];
+    let tokenClient = null;
+    let accessToken = null;
+
+    // Carrega Client ID salvo previamente no navegador
+    document.addEventListener('DOMContentLoaded', () => {
+      const savedClientId = localStorage.getItem('gcal_client_id');
+      if (savedClientId) {
+        document.getElementById('clientIdInput').value = savedClientId;
+      }
+    });
+
+    // Configuração de Drag & Drop
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      if (e.dataTransfer.files.length > 0) processPDF(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) processPDF(e.target.files[0]);
+    });
+
+    // Função Principal para LER o PDF
+    async function processPDF(file) {
+      if (file.type !== 'application/pdf') {
+        alert('Por favor, selecione um arquivo no formato PDF.');
+        return;
+      }
+
+      document.getElementById('loadingSpinner').classList.remove('d-none');
+      document.getElementById('resultsSection').classList.add('d-none');
+
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        let fullText = '';
+
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+          
+          // Agrupa os elementos de texto por posição Y (linhas da página)
+          const linesMap = {};
+          textContent.items.forEach(item => {
+            const y = Math.round(item.transform[5]);
+            if (!linesMap[y]) linesMap[y] = [];
+            linesMap[y].push(item);
+          });
+
+          // Ordena linhas de cima para baixo
+          const sortedYs = Object.keys(linesMap).map(Number).sort((a, b) => b - a);
+          const pageText = sortedYs.map(y => {
+            // Ordena itens da linha da esquerda para a direita
+            return linesMap[y].sort((a, b) => a.transform[4] - b.transform[4]).map(i => i.str).join(' ');
+          }).join('\n');
+
+          fullText += pageText + '\n';
+        }
+
+        listReservas = parsePDFText(fullText);
+        renderTable();
+
+        document.getElementById('loadingSpinner').classList.add('d-none');
+        document.getElementById('resultsSection').classList.remove('d-none');
+
+      } catch (err) {
+        console.error(err);
+        alert('Erro ao processar o arquivo PDF: ' + err.message);
+        document.getElementById('loadingSpinner').classList.add('d-none');
+      }
+    }
+
+    // Parser dos dados estruturados do Relatório da UNOESC
+    function parsePDFText(text) {
+      const blocks = text.split(/Dados da Reserva/gi).slice(1);
+      const reservas = [];
+
+      blocks.forEach((block, idx) => {
+        const cleanBlock = block.replace(/\n/g, ' ');
+
+        const pessoaMatch = cleanBlock.match(/Pessoa:\s*([0-9]+\s*-\s*[^Data|Hora|Bloco|Status|Descrição]+?)(?=\s+(?:Data|Hora|Bloco|Status|Descrição)|$)/i) || cleanBlock.match(/Pessoa:\s*([^Data|Hora|Bloco|Status]+)/i);
+        const dataMatch = cleanBlock.match(/Data da reserva:\s*(\d{2}\/\d{2}\/\d{4})/i);
+        const horaInicioMatch = cleanBlock.match(/Hora inicial:\s*(\d{2}:\d{2}(?::\d{2})?)/i);
+        const horaFimMatch = cleanBlock.match(/Hora final:\s*(\d{2}:\d{2}(?::\d{2})?)/i);
+        const blocoSalaMatch = cleanBlock.match(/Bloco\/Sala:\s*([^Hora|Status|Descrição|Recurso|Obs]+?)(?=\s+(?:Hora|Status|Descrição|Recurso|Obs|Data)|$)/i);
+        const statusMatch = cleanBlock.match(/Status:\s*(DEFERIDO|CANCELADO|AGUARDANDO ATENDIMENTO)/i);
+        const descMatch = cleanBlock.match(/Descrição:\s*([^Data|Hora|Bloco|Status|Recurso|Obs]+?)(?=\s+(?:Data|Hora|Bloco|Status|Recurso|Obs)|$)/i);
+        const obsMatch = cleanBlock.match(/Obs\.\s*reserva:\s*([^Recurso|Patrimônio]+?)(?=\s+(?:Recurso|Patrimônio)|$)/i);
+
+        const data = dataMatch ? dataMatch[1].trim() : '';
+        const pessoa = pessoaMatch ? pessoaMatch[1].trim() : '';
+        const horaInicio = horaInicioMatch ? horaInicioMatch[1].trim() : '';
+        const horaFim = horaFimMatch ? horaFimMatch[1].trim() : '';
+        const blocoSala = blocoSalaMatch ? blocoSalaMatch[1].trim() : '';
+        const status = statusMatch ? statusMatch[1].trim() : 'DEFERIDO';
+        const descricao = descMatch ? descMatch[1].trim() : '';
+        const obs = obsMatch ? obsMatch[1].trim() : '';
+
+        if (data && (pessoa || blocoSala)) {
+          reservas.push({
+            id: idx + 1,
+            data,
+            pessoa,
+            horaInicio,
+            horaFim,
+            blocoSala,
+            status,
+            descricao,
+            obs,
+            selected: status === 'DEFERIDO' // Seleciona automaticamente apenas se for DEFERIDO
+          });
+        }
+      });
+
+      return reservas;
+    }
+
+    // Renderiza a Tabela de Resultados
+    function renderTable() {
+      const tbody = document.getElementById('reservasTableBody');
+      tbody.innerHTML = '';
+
+      const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+      const statusFilter = document.getElementById('statusFilter').value;
+
+      listReservas.forEach(res => {
+        const matchesSearch = res.pessoa.toLowerCase().includes(searchTerm) ||
+                              res.blocoSala.toLowerCase().includes(searchTerm) ||
+                              res.descricao.toLowerCase().includes(searchTerm);
+        const matchesStatus = statusFilter === 'TODOS' || res.status === statusFilter;
+
+        if (!matchesSearch || !matchesStatus) return;
+
+        let badgeClass = 'badge-deferido';
+        if (res.status === 'CANCELADO') badgeClass = 'badge-cancelado';
+        if (res.status === 'AGUARDANDO ATENDIMENTO') badgeClass = 'badge-aguardando';
+
+        const googleLink = getGoogleCalendarSingleUrl(res);
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>
+            <input type="checkbox" class="reserva-check" ${res.selected ? 'checked' : ''} onchange="toggleSelect(${res.id}, this.checked)">
+          </td>
+          <td><strong>${res.data}</strong><br><small class="text-muted">${res.horaInicio} - ${res.horaFim}</small></td>
+          <td><strong>${res.blocoSala}</strong></td>
+          <td><small>${res.pessoa}</small></td>
+          <td><small>${res.descricao}${res.obs ? ' <br><em>Obs: ' + res.obs + '</em>' : ''}</small></td>
+          <td><span class="badge ${badgeClass}">${res.status}</span></td>
+          <td class="text-center">
+            <a href="${googleLink}" target="_blank" class="btn btn-sm btn-outline-primary" title="Adicionar diretamente no Google Agenda">
+              <i class="fa-regular fa-calendar-plus"></i>
+            </a>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      updateSelectedCount();
+    }
+
+    function toggleSelect(id, isChecked) {
+      const res = listReservas.find(r => r.id === id);
+      if (res) res.selected = isChecked;
+      updateSelectedCount();
+    }
+
+    function selectAll(check) {
+      listReservas.forEach(res => res.selected = check);
+      renderTable();
+    }
+
+    function toggleSelectAllHeader(headerCheck) {
+      selectAll(headerCheck.checked);
+    }
+
+    function filterTable() {
+      renderTable();
+    }
+
+    function updateSelectedCount() {
+      const count = listReservas.filter(r => r.selected).length;
+      document.getElementById('selectedCount').innerText = count;
+    }
+
+    // Gerador de Link Único do Google Agenda
+    function getGoogleCalendarSingleUrl(res) {
+      const [d, m, y] = res.data.split('/');
+      const hStart = (res.horaInicio || '19:00:00').replace(/:/g, '').padEnd(6, '0').slice(0,6);
+      const hEnd = (res.horaFim || '22:35:00').replace(/:/g, '').padEnd(6, '0').slice(0,6);
+      
+      const dates = `${y}${m}${d}T${hStart}/${y}${m}${d}T${hEnd}`;
+      const title = encodeURIComponent(`Reserva: ${res.blocoSala}`);
+      const details = encodeURIComponent(`Pessoa: ${res.pessoa}\nDescrição: ${res.descricao}\nObservação: ${res.obs}\nStatus: ${res.status}`);
+      const location = encodeURIComponent(res.blocoSala);
+
+      return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${dates}&details=${details}&location=${location}&ctz=America/Sao_Paulo`;
+    }
+
+    // Exportação em Lote para Arquivo .ICS (Universal / Google Agenda)
+    function downloadICS() {
+      const selected = listReservas.filter(r => r.selected);
+      if (selected.length === 0) {
+        alert('Selecione pelo menos uma reserva para exportar.');
+        return;
+      }
+
+      let icsLines = [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//Reserva Agenda UNOESC//PT-BR',
+        'CALSCALE:GREGORIAN',
+        'METHOD:PUBLISH'
+      ];
+
+      selected.forEach(res => {
+        const [d, m, y] = res.data.split('/');
+        const hStart = (res.horaInicio || '19:00:00').replace(/:/g, '').padEnd(6, '0').slice(0,6);
+        const hEnd = (res.horaFim || '22:35:00').replace(/:/g, '').padEnd(6, '0').slice(0,6);
+
+        icsLines.push('BEGIN:VEVENT');
+        icsLines.push(`UID:unoesc-reserva-${res.id}-${y}${m}${d}@agenda`);
+        icsLines.push(`DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}Z`);
+        icsLines.push(`DTSTART;TZID=America/Sao_Paulo:${y}${m}${d}T${hStart}`);
+        icsLines.push(`DTEND;TZID=America/Sao_Paulo:${y}${m}${d}T${hEnd}`);
+        icsLines.push(`SUMMARY:Reserva - ${res.blocoSala}`);
+        icsLines.push(`LOCATION:${res.blocoSala}`);
+        icsLines.push(`DESCRIPTION:Pessoa: ${res.pessoa}\\nDescrição: ${res.descricao}\\nStatus: ${res.status}`);
+        icsLines.push('END:VEVENT');
+      });
+
+      icsLines.push('END:VCALENDAR');
+
+      const blob = new Blob([icsLines.join('\r\n')], { type: 'text/calendar;charset=utf-8' });
+      const link = document.createElement('a');
+      link.href = window.URL.createObjectURL(blob);
+      link.download = `Reservas_UNOESC_${new Date().toISOString().slice(0,10)}.ics`;
+      link.click();
+    }
+
+    // Sincronização direta via Google API
+    function handleAuthClick() {
+      const clientId = document.getElementById('clientIdInput').value.trim();
+      if (!clientId) {
+        alert('Insira o Client ID do Google Cloud Console para ativar a integração direta via API.');
+        return;
+      }
+      localStorage.setItem('gcal_client_id', clientId);
+
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: 'https://www.googleapis.com/auth/calendar.events',
+        callback: (resp) => {
+          if (resp.error) {
+            alert('Erro na autenticação com o Google: ' + resp.error);
+            return;
+          }
+          accessToken = resp.access_token;
+          alert('Conectado com sucesso ao Google Agenda! Agora você pode cadastrar as reservas.');
+        }
+      });
+      tokenClient.requestAccessToken({ prompt: 'consent' });
+    }
+
+    async function syncWithGoogleCalendar() {
+      const selected = listReservas.filter(r => r.selected);
+      if (selected.length === 0) {
+        alert('Selecione pelo menos uma reserva.');
+        return;
+      }
+
+      if (!accessToken) {
+        if (confirm('A autenticação com a API do Google não foi realizada. Deseja realizar a exportação em formato .ICS para importar no seu Google Agenda?')) {
+          downloadICS();
+        }
+        return;
+      }
+
+      let successCount = 0;
+      for (const res of selected) {
+        try {
+          const [d, m, y] = res.data.split('/');
+          const startIso = `${y}-${m}-${d}T${res.horaInicio.length === 5 ? res.horaInicio + ':00' : res.horaInicio}`;
+          const endIso = `${y}-${m}-${d}T${res.horaFim.length === 5 ? res.horaFim + ':00' : res.horaFim}`;
+
+          const event = {
+            summary: `Reserva: ${res.blocoSala}`,
+            location: res.blocoSala,
+            description: `Pessoa: ${res.pessoa}\nDescrição: ${res.descricao}\nObservação: ${res.obs}\nStatus: ${res.status}`,
+            start: { dateTime: new Date(startIso).toISOString(), timeZone: 'America/Sao_Paulo' },
+            end: { dateTime: new Date(endIso).toISOString(), timeZone: 'America/Sao_Paulo' }
+          };
+
+          const resp = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(event)
+          });
+
+          if (resp.ok) successCount++;
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      alert(`${successCount} de ${selected.length} reserva(s) foram cadastradas com sucesso no Google Agenda!`);
+    }
+  </script>
+</body>
+</html>

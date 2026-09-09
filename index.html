@@ -4,16 +4,19 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Importador & Gerenciador de Reservas - UNOESC</title>
-  
+
   <!-- Bootstrap 5 CSS -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <!-- FontAwesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  
+
   <!-- Bibliotecas JS (Carregadas no topo para garantir disponibilidade) -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <!-- jsPDF (geração de PDF das reservas selecionadas) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 
   <style>
     body {
@@ -73,7 +76,27 @@
     .badge-deferido { background-color: #198754; color: #fff; }
     .badge-cancelado { background-color: #dc3545; color: #fff; }
     .badge-aguardando { background-color: #ffc107; color: #000; }
+
+    .badge-periodo {
+      font-size: 0.72rem;
+      padding: 0.3em 0.55em;
+      border-radius: 6px;
+      font-weight: 600;
+      display: inline-block;
+      white-space: nowrap;
+    }
+    .periodo-manha { background-color: #fff3cd; color: #7a5c00; }
+    .periodo-tarde { background-color: #ffe1c7; color: #8a4300; }
+    .periodo-noite { background-color: #dbe4ff; color: #1f2f8a; }
+    .periodo-misto { background-color: #e2d9f3; color: #4b2a86; }
+
     .tr-selected { background-color: #f0f7ff !important; }
+    .text-truncate-2 {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
   </style>
 </head>
 <body>
@@ -90,18 +113,29 @@
   </header>
 
   <div class="container-fluid px-4 mb-5">
-    
+
     <!-- Área de Upload do PDF -->
     <div class="card card-custom p-3">
       <div id="dropZone" class="drop-zone" onclick="triggerFileInput()">
         <i class="fa-solid fa-file-pdf fa-3x text-primary mb-2"></i>
         <h5 class="fw-bold mb-1">Clique aqui ou arraste o arquivo PDF</h5>
-        <p class="text-muted small mb-0">Compatível com qualquer período do relatório analítico UNOESC</p>
+        <p class="text-muted small mb-0">Compatível com o relatório <strong>"Agenda de Reservas - Sintético"</strong> da UNOESC (qualquer período/campus)</p>
         <input type="file" id="fileInput" accept="application/pdf" style="display: none;" onchange="handleFileSelect(event)">
       </div>
       <div id="loadingSpinner" class="text-center my-3 d-none">
         <div class="spinner-border text-primary" role="status"></div>
         <p class="mt-2 text-muted small">Lendo PDF e processando reservas...</p>
+      </div>
+    </div>
+
+    <!-- Legenda de Períodos -->
+    <div id="legendSection" class="card card-custom p-3 d-none">
+      <div class="d-flex flex-wrap align-items-center gap-3 small">
+        <strong class="text-muted"><i class="fa-solid fa-circle-info me-1"></i>Períodos:</strong>
+        <span class="badge-periodo periodo-manha"><i class="fa-solid fa-sun me-1"></i>De manhã</span>
+        <span class="badge-periodo periodo-tarde"><i class="fa-solid fa-cloud-sun me-1"></i>De tarde</span>
+        <span class="badge-periodo periodo-noite"><i class="fa-solid fa-moon me-1"></i>À noite</span>
+        <span class="badge-periodo periodo-misto"><i class="fa-solid fa-clock me-1"></i>Manhã e tarde / Tarde e noite</span>
       </div>
     </div>
 
@@ -111,7 +145,7 @@
         <div class="col-md-4">
           <div class="input-group input-group-sm">
             <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
-            <input type="text" id="searchInput" class="form-control" placeholder="Buscar por professor, disciplina, local..." oninput="renderTable()">
+            <input type="text" id="searchInput" class="form-control" placeholder="Buscar por solicitante, sala, recurso, observação..." oninput="renderTable()">
           </div>
         </div>
         <div class="col-md-3">
@@ -142,17 +176,19 @@
               <th style="width: 40px;" class="text-center">
                 <input type="checkbox" id="checkAllHeader" class="form-check-input" onclick="toggleHeaderCheck(this)">
               </th>
-              <th style="width: 130px;">Data / Horário</th>
-              <th style="width: 180px;">Local / Sala</th>
-              <th style="width: 180px;">Solicitante</th>
-              <th style="width: 220px;">Disciplina / Evento</th>
+              <th style="width: 110px;">Data</th>
+              <th style="width: 120px;">Período</th>
+              <th style="width: 190px;">Local / Sala</th>
+              <th style="width: 190px;">Solicitante</th>
+              <th style="width: 170px;">Recurso</th>
+              <th style="width: 220px;">Observação</th>
               <th style="width: 110px;">Status</th>
               <th style="width: 80px;" class="text-center">1-Clique</th>
             </tr>
           </thead>
           <tbody id="reservasTableBody">
             <tr>
-              <td colspan="7" class="text-center text-muted py-4">Nenhum arquivo PDF carregado ainda. Selecione um PDF acima.</td>
+              <td colspan="9" class="text-center text-muted py-4">Nenhum arquivo PDF carregado ainda. Selecione um PDF acima.</td>
             </tr>
           </tbody>
         </table>
@@ -163,7 +199,10 @@
         <div class="text-muted">
           <strong id="selectedCount" class="text-primary fs-5">0</strong> de <span id="totalCount">0</span> reservas selecionadas
         </div>
-        <div class="d-flex gap-2">
+        <div class="d-flex gap-2 flex-wrap">
+          <button class="btn btn-outline-danger" onclick="downloadPDF()">
+            <i class="fa-solid fa-file-pdf me-2"></i>Gerar PDF
+          </button>
           <button class="btn btn-outline-success" onclick="downloadICS()">
             <i class="fa-solid fa-file-arrow-down me-2"></i>Exportar (.ICS)
           </button>
@@ -232,16 +271,69 @@
     let configModalInstance = null;
     let syncModalInstance = null;
 
+    // ======================================================================
+    //  MAPEAMENTO DE TURNO -> PERÍODO (exibição) e HORÁRIO (uso interno p/
+    //  criar o evento na agenda - o usuário não precisa ver o horário)
+    // ======================================================================
+    const PERIODO_LABELS = {
+      'MATUTINO': 'De manhã',
+      'VESPERTINO': 'De tarde',
+      'NOTURNO': 'À noite',
+      'MATUTINO E VESPERTINO': 'Manhã e tarde',
+      'VESPERTINO E NOTURNO': 'Tarde e noite',
+      'MATUTINO, VESPERTINO E NOTURNO': 'Manhã, tarde e noite'
+    };
+
+    const PERIODO_HORARIOS = {
+      'MATUTINO': { inicio: '08:00:00', fim: '12:00:00' },
+      'VESPERTINO': { inicio: '13:30:00', fim: '17:30:00' },
+      'NOTURNO': { inicio: '19:00:00', fim: '22:35:00' },
+      'MATUTINO E VESPERTINO': { inicio: '08:00:00', fim: '17:30:00' },
+      'VESPERTINO E NOTURNO': { inicio: '13:30:00', fim: '22:35:00' },
+      'MATUTINO, VESPERTINO E NOTURNO': { inicio: '08:00:00', fim: '22:35:00' }
+    };
+
+    function normalizeTurno(turnoRaw) {
+      return (turnoRaw || '').replace(/\s+/g, ' ').trim().toUpperCase();
+    }
+
+    function turnoToPeriodoLabel(turnoRaw) {
+      const key = normalizeTurno(turnoRaw);
+      if (PERIODO_LABELS[key]) return PERIODO_LABELS[key];
+      if (!key) return 'Não informado';
+      // fallback: tenta traduzir token a token, mantendo "e" entre eles
+      const singleMap = { MATUTINO: 'manhã', VESPERTINO: 'tarde', NOTURNO: 'noite' };
+      const parts = key.split(/\s*,\s*|\s+E\s+/).map(p => singleMap[p] || p.toLowerCase());
+      if (parts.length > 1) {
+        const cap = parts.join(' e ');
+        return cap.charAt(0).toUpperCase() + cap.slice(1);
+      }
+      return turnoRaw || 'Não informado';
+    }
+
+    function turnoToHorario(turnoRaw) {
+      const key = normalizeTurno(turnoRaw);
+      return PERIODO_HORARIOS[key] || { inicio: '08:00:00', fim: '18:00:00' };
+    }
+
+    function periodoBadgeClass(turnoRaw) {
+      const key = normalizeTurno(turnoRaw);
+      if (key === 'MATUTINO') return 'periodo-manha';
+      if (key === 'VESPERTINO') return 'periodo-tarde';
+      if (key === 'NOTURNO') return 'periodo-noite';
+      return 'periodo-misto';
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
       const dropZone = document.getElementById('dropZone');
 
-      dropZone.addEventListener('dragover', (e) => { 
-        e.preventDefault(); 
-        dropZone.classList.add('dragover'); 
+      dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
       });
 
-      dropZone.addEventListener('dragleave', () => { 
-        dropZone.classList.remove('dragover'); 
+      dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('dragover');
       });
 
       dropZone.addEventListener('drop', (e) => {
@@ -283,6 +375,16 @@
       alert('Client ID salvo com sucesso!');
     }
 
+    // ======================================================================
+    //  LEITURA DO PDF
+    //
+    //  O relatório "Agenda de Reservas - Sintético" é impresso em uma
+    //  página PAISAGEM com rotação de 90° (page.rotate = 90). O pdf.js
+    //  entrega item.transform em coordenadas NÃO rotacionadas: se usarmos
+    //  x/y direto (como em versões anteriores desta ferramenta), as colunas
+    //  saem trocadas/embaralhadas. Por isso aplicamos a matriz do viewport
+    //  (que já incorpora a rotação da página) a cada item antes de tudo.
+    // ======================================================================
     async function processPDF(file) {
       if (!file || file.type !== 'application/pdf') {
         alert('Por favor, selecione um arquivo no formato PDF válido.');
@@ -294,56 +396,32 @@
       try {
         const arrayBuffer = await file.arrayBuffer();
         const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-        let columnBlocks = [];
+        let allReservas = [];
 
         for (let i = 1; i <= pdf.numPages; i++) {
           const page = await pdf.getPage(i);
+          const viewport = page.getViewport({ scale: 1 });
           const textContent = await page.getTextContent();
-          
-          const items = (textContent.items || []).map(item => ({
-            str: item.str,
-            x: item.transform[4],
-            y: item.transform[5]
-          })).filter(item => item.str && item.str.trim() !== '');
 
-          if (items.length === 0) continue;
+          const items = (textContent.items || []).map(item => {
+            const [x, y] = pdfjsLib.Util.applyTransform(
+              [item.transform[4], item.transform[5]],
+              viewport.transform
+            );
+            return { str: item.str, x: x, y: y };
+          }).filter(it => it.str && it.str.trim() !== '');
 
-          let minX = Math.min(...items.map(it => it.x));
-          let maxX = Math.max(...items.map(it => it.x));
-          let midX = minX + (maxX - minX) / 2;
-
-          let leftItems = items.filter(it => it.x < midX);
-          let rightItems = items.filter(it => it.x >= midX);
-
-          function buildColumnText(colItems) {
-            let lines = [];
-            colItems.forEach(item => {
-              let line = lines.find(l => Math.abs(l.y - item.y) < 4);
-              if (!line) {
-                line = { y: item.y, items: [] };
-                lines.push(line);
-              }
-              line.items.push(item);
-            });
-            lines.sort((a, b) => b.y - a.y);
-            return lines.map(line => {
-              line.items.sort((a, b) => a.x - b.x);
-              return line.items.map(it => it.str.trim()).join(' ');
-            }).join('\n');
-          }
-
-          let leftText = buildColumnText(leftItems);
-          let rightText = buildColumnText(rightItems);
-
-          if (leftText.trim()) columnBlocks.push(leftText);
-          if (rightText.trim()) columnBlocks.push(rightText);
+          const pageReservas = parsePageItems(items);
+          allReservas = allReservas.concat(pageReservas);
         }
 
-        listReservas = parseBlocksToReservas(columnBlocks);
+        allReservas.forEach((r, idx) => { r.id = idx + 1; });
+        listReservas = allReservas;
 
         if (listReservas.length === 0) {
-          alert('Nenhuma reserva pôde ser identificada no PDF informado.');
+          alert('Nenhuma reserva pôde ser identificada no PDF informado. Verifique se é o relatório "Agenda de Reservas - Sintético".');
         } else {
+          document.getElementById('legendSection').classList.remove('d-none');
           renderTable();
         }
 
@@ -355,82 +433,126 @@
       }
     }
 
-    function parseBlocksToReservas(blocks) {
-      let reservas = [];
+    // Colunas do relatório Sintético, na ordem em que aparecem na página
+    // (posições x já corrigidas pela rotação). Os limites foram calibrados
+    // a partir do relatório real e têm folga suficiente para variações.
+    function colOf(x) {
+      if (x < 190) return 'pessoa';
+      if (x < 240) return 'data';
+      if (x < 290) return 'turno';
+      if (x < 400) return 'sala';
+      if (x < 520) return 'recurso';
+      if (x < 720) return 'obs';
+      return 'status';
+    }
 
-      blocks.forEach((block) => {
-        if (!block || !block.trim()) return;
+    const STATUS_RE = /^(DEFERIDO|CANCELADO|AGUARDANDO(?:\s+ATENDIMENTO)?)$/i;
 
-        if (!/Hora\s+inicial|Reserva\s+para\s+Disciplina|Dados\s+da\s+Reserva/i.test(block)) {
-          return;
+    function joinColumnItems(arr) {
+      arr.sort((a, b) => (a.y - b.y) || (a.x - b.x)); // topo->baixo, esquerda->direita
+      return arr.map(it => it.str.trim()).join(' ').replace(/\s+/g, ' ').trim();
+    }
+
+    // Tenta localizar o cabeçalho da tabela na página e recalcular as
+    // fronteiras de coluna dinamicamente (mais robusto a pequenas
+    // variações de layout). Se não encontrar, usa colOf() como fallback.
+    function detectDynamicColumns(items) {
+      const wanted = [
+        { key: 'pessoa', re: /^Pessoa/i },
+        { key: 'data', re: /^Data$/i },
+        { key: 'turno', re: /^Turno$/i },
+        { key: 'sala', re: /^Sala$/i },
+        { key: 'recurso', re: /^Tipo\s+de\s+recurso/i },
+        { key: 'obs', re: /^Observa/i },
+        { key: 'status', re: /^Status$/i }
+      ];
+      const found = [];
+      wanted.forEach(w => {
+        const it = items.find(i => w.re.test(i.str.trim()));
+        if (it) found.push({ key: w.key, x: it.x });
+      });
+      if (found.length < 5) return null; // não achou cabeçalho suficiente, usa fallback fixo
+
+      found.sort((a, b) => a.x - b.x);
+      const bounds = found.map((f, idx) => {
+        const nextX = idx < found.length - 1 ? found[idx + 1].x : Infinity;
+        return { key: f.key, min: f.x - 60, max: idx < found.length - 1 ? (f.x + nextX) / 2 : Infinity };
+      });
+      return function (x) {
+        for (const b of bounds) {
+          if (x >= b.min && x < b.max) return b.key;
         }
+        return bounds[bounds.length - 1].key;
+      };
+    }
 
-        let status = 'DEFERIDO';
-        const statusMatch = block.match(/\b(DEFERIDO|CANCELADO|AGUARDANDO ATENDIMENTO|AGUARDANDO)\b/i);
-        if (statusMatch) {
-          status = statusMatch[1].toUpperCase();
-          if (status.includes('AGUARDANDO')) status = 'AGUARDANDO ATENDIMENTO';
-        }
+    function parsePageItems(items) {
+      const dynamicColOf = detectDynamicColumns(items);
+      const getCol = dynamicColOf || colOf;
 
-        let horaInicio = '19:00:00';
-        let horaFim = '22:35:00';
+      const statusItems = items.filter(it => getCol(it.x) === 'status' && STATUS_RE.test(it.str.trim()));
+      if (statusItems.length === 0) return [];
 
-        const hIniMatch = block.match(/Hora\s+inicial:\s*(\d{2}:\d{2}(?::\d{2})?)/i) || block.match(/\b(\d{2}:\d{2}:\d{2})\b/);
-        if (hIniMatch) horaInicio = hIniMatch[1];
-
-        const hFimMatch = block.match(/Hora\s+final:\s*(\d{2}:\d{2}(?::\d{2})?)/i) || block.match(/Data\s+da\s+reserva:\s*(\d{2}:\d{2}:\d{2})/i);
-        if (hFimMatch) horaFim = hFimMatch[1];
-
-        if (horaInicio.length === 5) horaInicio += ':00';
-        if (horaFim.length === 5) horaFim += ':00';
-
-        let dataReserva = '';
-        const datesFound = [...block.matchAll(/\b(\d{2}\/\d{2}\/\d{4})\b/g)].map(m => m[1]);
-        if (datesFound.length > 0) {
-          dataReserva = datesFound[datesFound.length - 1];
-        }
-
-        if (!dataReserva) return;
-
-        let pessoa = 'Não informada';
-        const pessoaMatch = block.match(/Pessoa:\s*(\d+\s*[-–]\s*[^\n]+)/i) || block.match(/(\d{4,7}\s*[-–]\s*[A-ZÁÉÍÓÚÂÊÔÃÕÇ\s]{3,})/i);
-        if (pessoaMatch) {
-          pessoa = pessoaMatch[1].trim();
-        }
-
-        let local = 'Espaço Geral';
-        const blocoMatch = block.match(/Bloco\/Sala:\s*([^\n]+)/i) || block.match(/\b((?:BLOCO|CENTRO|AUDITORIO|LAB)[^\n]+)/i);
-        if (blocoMatch) {
-          local = blocoMatch[1].trim();
-        }
-
-        let disciplina = '-';
-        const discMatch = block.match(/Reserva\s+para\s+Disciplina:\s*([^\n]+)/i) || block.match(/Disciplina:\s*([^\n]+)/i);
-        if (discMatch) {
-          disciplina = discMatch[1].trim();
-        }
-
-        let recurso = local;
-        const recMatch = block.match(/Recurso\s+Quantidade[^\n]*\n+([^\n]+)/i) || block.match(/Descrição:\s*([^\n]+)/i);
-        if (recMatch) {
-          recurso = recMatch[1].replace(/\s+\d+\s*$/, '').trim();
-        }
-
-        reservas.push({
-          id: reservas.length + 1,
-          data: dataReserva,
-          horaInicio: horaInicio,
-          horaFim: horaFim,
-          local: local,
-          pessoa: pessoa,
-          disciplina: disciplina,
-          recurso: recurso,
-          status: status,
-          selected: status === 'DEFERIDO'
-        });
+      // Agrupa itens de status que porventura estejam quebrados em 2 (ex: "AGUARDANDO" + "ATENDIMENTO")
+      const anchorGroups = [];
+      statusItems.forEach(it => {
+        let g = anchorGroups.find(a => Math.abs(a.y - it.y) < 4);
+        if (!g) { g = { y: it.y, parts: [] }; anchorGroups.push(g); }
+        g.parts.push(it);
       });
 
-      return reservas;
+      const anchors = anchorGroups.map(g => ({
+        y: g.y,
+        status: joinColumnItems(g.parts).toUpperCase().trim()
+      }));
+      anchors.sort((a, b) => a.y - b.y); // topo -> baixo
+
+      // Cada reserva ocupa uma "faixa" vertical entre o ponto médio até a
+      // âncora anterior e o ponto médio até a próxima âncora. Isso resolve
+      // o problema de células com texto que quebra em 2-3 linhas (Sala,
+      // Turno e Observação), pois todo o texto quebrado cai dentro da
+      // faixa do registro correto, mesmo que fique acima/abaixo da linha
+      // "principal" da linha.
+      const MARGIN = 9;
+      const bands = anchors.map((a, i) => {
+        const lower = i > 0 ? (anchors[i - 1].y + a.y) / 2 : a.y - MARGIN;
+        const upper = i < anchors.length - 1 ? (a.y + anchors[i + 1].y) / 2 : a.y + MARGIN;
+        let status = a.status;
+        if (status.includes('AGUARDANDO')) status = 'AGUARDANDO ATENDIMENTO';
+        return { lower, upper, status };
+      });
+
+      const records = bands.map(b => ({
+        pessoa: [], data: [], turno: [], sala: [], recurso: [], obs: [], status: b.status, _band: b
+      }));
+
+      items.forEach(it => {
+        const col = getCol(it.x);
+        if (col === 'status') return; // status já resolvido pelas âncoras
+        const rec = records.find(r => it.y >= r._band.lower && it.y < r._band.upper);
+        if (!rec) return;
+        rec[col].push(it);
+      });
+
+      return records.map(r => {
+        const pessoaTexto = joinColumnItems(r.pessoa) || 'Não informada';
+        const dataTexto = joinColumnItems(r.data);
+        const turnoTexto = joinColumnItems(r.turno);
+        const salaTexto = joinColumnItems(r.sala) || 'Espaço Geral';
+        const recursoTexto = joinColumnItems(r.recurso).replace(/;\s*$/, '').trim();
+        const obsTexto = joinColumnItems(r.obs);
+
+        return {
+          data: dataTexto,
+          turno: turnoTexto,
+          local: salaTexto,
+          pessoa: pessoaTexto,
+          recurso: recursoTexto || salaTexto,
+          observacao: obsTexto,
+          status: r.status,
+          selected: r.status === 'DEFERIDO'
+        };
+      }).filter(r => /^\d{2}\/\d{2}\/\d{4}$/.test(r.data)); // descarta linhas sem data válida (ex: ruído)
     }
 
     function renderTable() {
@@ -443,14 +565,14 @@
       let visibleList = listReservas.filter(res => {
         const matchesSearch = res.pessoa.toLowerCase().includes(search) ||
                               res.local.toLowerCase().includes(search) ||
-                              res.disciplina.toLowerCase().includes(search) ||
-                              res.recurso.toLowerCase().includes(search);
+                              res.recurso.toLowerCase().includes(search) ||
+                              (res.observacao || '').toLowerCase().includes(search);
         const matchesStatus = statusFilter === 'TODOS' || res.status === statusFilter;
         return matchesSearch && matchesStatus;
       });
 
       if (visibleList.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="7" class="text-center text-muted py-4">Nenhuma reserva encontrada para os filtros aplicados.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="9" class="text-center text-muted py-4">Nenhuma reserva encontrada para os filtros aplicados.</td></tr>`;
         updateCounters();
         return;
       }
@@ -461,6 +583,8 @@
         if (res.status === 'AGUARDANDO ATENDIMENTO') badgeClass = 'badge-aguardando';
 
         const gCalUrl = getGoogleCalendarSingleUrl(res);
+        const periodoLabel = turnoToPeriodoLabel(res.turno);
+        const periodoClass = periodoBadgeClass(res.turno);
 
         const tr = document.createElement('tr');
         if (res.selected) tr.classList.add('tr-selected');
@@ -469,16 +593,12 @@
           <td class="text-center">
             <input type="checkbox" class="form-check-input" ${res.selected ? 'checked' : ''} onchange="toggleSelect(${res.id}, this.checked)">
           </td>
-          <td>
-            <strong>${res.data}</strong><br>
-            <small class="text-muted">${res.horaInicio.slice(0,5)} - ${res.horaFim.slice(0,5)}</small>
-          </td>
-          <td>
-            <strong>${res.local}</strong><br>
-            <small class="text-secondary">${res.recurso}</small>
-          </td>
+          <td><strong>${res.data}</strong></td>
+          <td><span class="badge-periodo ${periodoClass}">${periodoLabel}</span></td>
+          <td><strong>${res.local}</strong></td>
           <td><small>${res.pessoa}</small></td>
-          <td><small class="fw-semibold">${res.disciplina}</small></td>
+          <td><small>${res.recurso}</small></td>
+          <td><small class="text-truncate-2" title="${(res.observacao || '').replace(/"/g,'&quot;')}">${res.observacao || '<span class="text-muted">-</span>'}</small></td>
           <td><span class="badge-status ${badgeClass}">${res.status}</span></td>
           <td class="text-center">
             <a href="${gCalUrl}" target="_blank" class="btn btn-sm btn-outline-primary" title="Adicionar no Google Agenda">
@@ -510,7 +630,8 @@
       listReservas.forEach(res => {
         const matchesSearch = res.pessoa.toLowerCase().includes(search) ||
                               res.local.toLowerCase().includes(search) ||
-                              res.disciplina.toLowerCase().includes(search);
+                              res.recurso.toLowerCase().includes(search) ||
+                              (res.observacao || '').toLowerCase().includes(search);
         const matchesStatus = statusFilter === 'TODOS' || res.status === statusFilter;
 
         if (matchesSearch && matchesStatus) {
@@ -536,12 +657,17 @@
 
     function getGoogleCalendarSingleUrl(res) {
       const [d, m, y] = res.data.split('/');
-      const hStart = formatTime(res.horaInicio);
-      const hEnd = formatTime(res.horaFim);
-      
+      const horario = turnoToHorario(res.turno);
+      const hStart = formatTime(horario.inicio);
+      const hEnd = formatTime(horario.fim);
+
       const dates = `${y}${m}${d}T${hStart}/${y}${m}${d}T${hEnd}`;
       const title = encodeURIComponent(`Reserva: ${res.local}`);
-      const details = encodeURIComponent(`Solicitante: ${res.pessoa}\nDisciplina: ${res.disciplina}\nRecurso: ${res.recurso}\nStatus: ${res.status}`);
+      const details = encodeURIComponent(
+        `Solicitante: ${res.pessoa}\nPeríodo: ${turnoToPeriodoLabel(res.turno)}\nRecurso: ${res.recurso}` +
+        (res.observacao ? `\nObservação: ${res.observacao}` : '') +
+        `\nStatus: ${res.status}`
+      );
       const location = encodeURIComponent(res.local);
 
       return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${dates}&details=${details}&location=${location}&ctz=America/Sao_Paulo`;
@@ -564,8 +690,9 @@
 
       selected.forEach(res => {
         const [d, m, y] = res.data.split('/');
-        const hStart = formatTime(res.horaInicio);
-        const hEnd = formatTime(res.horaFim);
+        const horario = turnoToHorario(res.turno);
+        const hStart = formatTime(horario.inicio);
+        const hEnd = formatTime(horario.fim);
         const dtFormatted = `${y}${m}${d}`;
 
         icsLines.push('BEGIN:VEVENT');
@@ -575,7 +702,7 @@
         icsLines.push(`DTEND;TZID=America/Sao_Paulo:${dtFormatted}T${hEnd}`);
         icsLines.push(`SUMMARY:Reserva: ${res.local}`);
         icsLines.push(`LOCATION:${res.local}`);
-        icsLines.push(`DESCRIPTION:Solicitante: ${res.pessoa}\\nDisciplina: ${res.disciplina}\\nRecurso: ${res.recurso}\\nStatus: ${res.status}`);
+        icsLines.push(`DESCRIPTION:Solicitante: ${res.pessoa}\\nPeríodo: ${turnoToPeriodoLabel(res.turno)}\\nRecurso: ${res.recurso}${res.observacao ? '\\nObservação: ' + res.observacao : ''}\\nStatus: ${res.status}`);
         icsLines.push('END:VEVENT');
       });
 
@@ -586,6 +713,68 @@
       link.href = window.URL.createObjectURL(blob);
       link.download = `Reservas_Selecionadas_UNOESC.ics`;
       link.click();
+    }
+
+    // ======================================================================
+    //  GERAR PDF DAS RESERVAS SELECIONADAS
+    // ======================================================================
+    function downloadPDF() {
+      const selected = listReservas.filter(r => r.selected);
+      if (selected.length === 0) {
+        alert('Selecione pelo menos uma reserva na lista para gerar o PDF.');
+        return;
+      }
+      if (typeof window.jspdf === 'undefined') {
+        alert('Não foi possível carregar a biblioteca de geração de PDF. Verifique sua conexão com a internet e tente novamente.');
+        return;
+      }
+
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+
+      doc.setFontSize(14);
+      doc.setFont(undefined, 'bold');
+      doc.text('UNOESC - Reservas Selecionadas para Agendamento', 40, 40);
+      doc.setFontSize(9);
+      doc.setFont(undefined, 'normal');
+      doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}  |  Total de reservas: ${selected.length}`, 40, 58);
+
+      const rows = selected.map(res => [
+        res.data,
+        turnoToPeriodoLabel(res.turno),
+        res.local,
+        res.pessoa,
+        res.recurso,
+        res.observacao || '-',
+        res.status
+      ]);
+
+      doc.autoTable({
+        startY: 72,
+        head: [['Data', 'Período', 'Local / Sala', 'Solicitante', 'Recurso', 'Observação', 'Status']],
+        body: rows,
+        styles: { fontSize: 8, cellPadding: 4, overflow: 'linebreak' },
+        headStyles: { fillColor: [13, 110, 253], textColor: 255, fontStyle: 'bold' },
+        columnStyles: {
+          0: { cellWidth: 60 },
+          1: { cellWidth: 70 },
+          2: { cellWidth: 110 },
+          3: { cellWidth: 120 },
+          4: { cellWidth: 100 },
+          5: { cellWidth: 140 },
+          6: { cellWidth: 65 }
+        },
+        didParseCell: function (data) {
+          if (data.section === 'body' && data.column.index === 6) {
+            const val = (data.cell.raw || '').toString();
+            if (val === 'DEFERIDO') data.cell.styles.textColor = [25, 135, 84];
+            else if (val === 'CANCELADO') data.cell.styles.textColor = [220, 53, 69];
+            else if (val.indexOf('AGUARDANDO') === 0) data.cell.styles.textColor = [153, 116, 0];
+          }
+        }
+      });
+
+      doc.save(`Reservas_Selecionadas_UNOESC_${new Date().toISOString().slice(0, 10)}.pdf`);
     }
 
     function syncToGoogleCalendar() {
@@ -646,13 +835,16 @@
         document.getElementById('syncProgressBar').innerText = `${progressPct}%`;
 
         const [d, m, y] = res.data.split('/');
-        const startIso = `${y}-${m}-${d}T${res.horaInicio}`;
-        const endIso = `${y}-${m}-${d}T${res.horaFim}`;
+        const horario = turnoToHorario(res.turno);
+        const startIso = `${y}-${m}-${d}T${horario.inicio}`;
+        const endIso = `${y}-${m}-${d}T${horario.fim}`;
 
         const eventData = {
           summary: `Reserva: ${res.local}`,
           location: res.local,
-          description: `Solicitante: ${res.pessoa}\nDisciplina: ${res.disciplina}\nRecurso: ${res.recurso}\nStatus: ${res.status}`,
+          description: `Solicitante: ${res.pessoa}\nPeríodo: ${turnoToPeriodoLabel(res.turno)}\nRecurso: ${res.recurso}` +
+                       (res.observacao ? `\nObservação: ${res.observacao}` : '') +
+                       `\nStatus: ${res.status}`,
           start: { dateTime: startIso, timeZone: 'America/Sao_Paulo' },
           end: { dateTime: endIso, timeZone: 'America/Sao_Paulo' }
         };

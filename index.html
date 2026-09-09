@@ -45,9 +45,39 @@
     .table-container {
       max-height: 550px;
       overflow-y: auto;
+      border: 1px solid #dee2e6;
+      border-radius: 8px;
     }
-    .badge-deferido { background-color: #198754; }
-    .badge-cancelado { background-color: #dc3545; }
+    /* Tabela Estrita para evitar quebras de layout */
+    .table-custom {
+      width: 100%;
+      table-layout: fixed;
+      margin-bottom: 0;
+    }
+    .table-custom th, .table-custom td {
+      vertical-align: middle;
+      word-wrap: break-word;
+      white-space: normal;
+      font-size: 0.9rem;
+    }
+    .col-check { width: 40px; }
+    .col-data { width: 140px; }
+    .col-local { width: 220px; }
+    .col-pessoa { width: 200px; }
+    .col-desc { width: auto; }
+    .col-status { width: 130px; }
+    .col-acao { width: 60px; }
+
+    .badge-status {
+      font-size: 0.75rem;
+      padding: 0.4em 0.6em;
+      border-radius: 6px;
+      font-weight: 600;
+      display: inline-block;
+      text-align: center;
+    }
+    .badge-deferido { background-color: #198754; color: #fff; }
+    .badge-cancelado { background-color: #dc3545; color: #fff; }
     .badge-aguardando { background-color: #ffc107; color: #000; }
   </style>
 </head>
@@ -68,7 +98,7 @@
       <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
         <div>
           <h5 class="card-title mb-1"><i class="fa-brands fa-google me-2 text-primary"></i>Conexão com o Google Agenda</h5>
-          <small class="text-muted">Insira seu <strong>Client ID</strong> do Google Cloud para sincronizar diretamente ou utilize a exportação em <strong>.ICS</strong> (sem necessidade de chave).</small>
+          <small class="text-muted">Insira seu <strong>Client ID</strong> do Google Cloud ou utilize a exportação em <strong>.ICS</strong>.</small>
         </div>
         <div class="d-flex gap-2 align-items-center">
           <input type="text" id="clientIdInput" class="form-control form-control-sm" style="width: 280px;" placeholder="Seu Google Client ID (Opcional)">
@@ -103,8 +133,8 @@
         </div>
         <div class="col-md-3">
           <select id="statusFilter" class="form-select" onchange="filterTable()">
-            <option value="TODOS">Todos os Status</option>
             <option value="DEFERIDO" selected>Somente DEFERIDO</option>
+            <option value="TODOS">Todos os Status</option>
             <option value="CANCELADO">Somente CANCELADO</option>
             <option value="AGUARDANDO ATENDIMENTO">Aguardando Atendimento</option>
           </select>
@@ -115,18 +145,18 @@
         </div>
       </div>
 
-      <!-- Tabela -->
-      <div class="table-responsive table-container">
-        <table class="table table-hover align-middle">
+      <!-- Tabela Estilizada -->
+      <div class="table-container">
+        <table class="table table-hover align-middle table-custom">
           <thead class="table-light sticky-top">
             <tr>
-              <th width="40"><input type="checkbox" id="checkAllHeader" onclick="toggleSelectAllHeader(this)"></th>
-              <th>Data / Horário</th>
-              <th>Local / Recurso</th>
-              <th>Pessoa / Solicitante</th>
-              <th>Descrição / Disciplina</th>
-              <th>Status</th>
-              <th class="text-center">Ação</th>
+              <th class="col-check"><input type="checkbox" id="checkAllHeader" onclick="toggleSelectAllHeader(this)"></th>
+              <th class="col-data">Data / Horário</th>
+              <th class="col-local">Local / Recurso</th>
+              <th class="col-pessoa">Pessoa / Solicitante</th>
+              <th class="col-desc">Descrição / Disciplina</th>
+              <th class="col-status">Status</th>
+              <th class="col-acao text-center">Ação</th>
             </tr>
           </thead>
           <tbody id="reservasTableBody">
@@ -158,7 +188,6 @@
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 
   <script>
-    // Configura o worker do PDF.js
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
     let listReservas = [];
@@ -187,7 +216,6 @@
       if (e.target.files.length > 0) processPDF(e.target.files[0]);
     });
 
-    // Processamento Seguro do PDF
     async function processPDF(file) {
       if (!file || file.type !== 'application/pdf') {
         alert('Por favor, selecione um arquivo no formato PDF válido.');
@@ -243,67 +271,116 @@
       }
     }
 
-    // Função de Extração Totalmente Protegida contra Valores Undefined
-    function parsePDFText(text) {
-      if (!text || typeof text !== 'string') return [];
+    // Remove ruídos de cabeçalho e rodapé do PDF
+    function sanitizePDFText(text) {
+      if (!text) return '';
+      return text
+        .replace(/UNIVERSIDADE DO OESTE DE SANTA CATARINA[^\n]*/gi, '')
+        .replace(/Agenda de Reservas\s*-\s*Analítico[^\n]*/gi, '')
+        .replace(/Campus:[^\n]*/gi, '')
+        .replace(/Impresso por:[^\n]*/gi, '')
+        .replace(/pag\.\s*\d+\s*de\s*\d+[^\n]*/gi, '')
+        .replace(/\s+/g, ' ');
+    }
 
-      // Divide por blocos de reserva mantendo tolerância a variações do relatório
-      const blocks = text.split(/(?:Dados da Reserva|Reserva nº|Reserva #)/gi);
-      const rawBlocks = blocks.length > 1 ? blocks.slice(1) : [text];
+    // Algoritmo de Extração Precisão por Solicitante
+    function parsePDFText(rawText) {
+      if (!rawText || typeof rawText !== 'string') return [];
+
+      const cleanText = sanitizePDFText(rawText);
+
+      // Localiza ocorrências de pessoas (Matrícula - Nome)
+      const personRegex = /(?:Pessoa:\s*)?(\b\d{4,7}\s*[-–]\s*[A-ZÁÉÍÓÚÂÊÔÃÕÇ\s]{3,})/gi;
+      const matches = [];
+      let match;
+
+      while ((match = personRegex.exec(cleanText)) !== null) {
+        let rawPerson = match[1].trim();
+        // Remove rótulos adicionais que possam ter ficado anexados ao nome
+        rawPerson = rawPerson.replace(/\s+(Recurso|Data|Hora|Bloco|Sala|Status|Descrição|Quantidade|Patrimônios).*$/i, '');
+        matches.push({
+          person: rawPerson,
+          index: match.index
+        });
+      }
+
+      if (matches.length === 0) return [];
+
       const reservas = [];
 
-      // Helper ultra seguro para ler rótulos
-      const getFieldValue = (blockStr, labelPattern) => {
-        if (!blockStr) return '';
-        const nextLabels = '(?:Pessoa|Data|Hora|Bloco|Sala|Status|Descrição|Obs|Recurso|Patrimônio)';
-        const regex = new RegExp(`${labelPattern}\\s*:?\\s*(.*?)(?=\\s+${nextLabels}\\s*:|$)`, 'i');
-        const match = blockStr.match(regex);
-        return (match && match[1]) ? match[1].trim() : '';
-      };
+      for (let i = 0; i < matches.length; i++) {
+        const current = matches[i];
+        const startIndex = current.index;
+        const endIndex = (i + 1 < matches.length) ? matches[i + 1].index : cleanText.length;
 
-      rawBlocks.forEach((block, idx) => {
-        const cleanBlock = (block || '').replace(/\s+/g, ' ');
+        // Janela de busca retroativa para capturar metadados do bloco
+        const backtrackStart = Math.max(0, startIndex - 250);
+        const prevLimit = (i > 0) ? matches[i - 1].index + 20 : 0;
+        const effectiveStart = Math.max(backtrackStart, prevLimit);
 
-        const data = getFieldValue(cleanBlock, 'Data(?: da reserva)?') || 
-                     (cleanBlock.match(/\b(\d{2}\/\d{2}\/20\d{2})\b/)?.[1] || '');
-                     
-        const horaInicio = getFieldValue(cleanBlock, 'Hora inicial') || 
-                          (cleanBlock.match(/\b(\d{2}:\d{2}(?::\d{2})?)\b/)?.[1] || '19:00:00');
-                          
-        const horaFim = getFieldValue(cleanBlock, 'Hora final') || '22:35:00';
-        
-        const pessoa = getFieldValue(cleanBlock, 'Pessoa') || 
-                       (cleanBlock.match(/\b\d{4,7}\s*-?\s*([A-ZÁÉÍÓÚÂÊÔÃÕÇ\s]{3,})/i)?.[0] || '');
-                       
-        const blocoSala = getFieldValue(cleanBlock, 'Bloco\\/Sala|Bloco|Sala') || 
-                          (cleanBlock.match(/(?:BLOCO|CENTRO DE CONVIVENCIA)[^Status|Pessoa|Hora|Data]+/i)?.[0] || '');
+        const chunk = cleanText.substring(effectiveStart, endIndex);
 
-        let status = getFieldValue(cleanBlock, 'Status');
-        if (!status) {
-          if (cleanBlock.includes('DEFERIDO')) status = 'DEFERIDO';
-          else if (cleanBlock.includes('CANCELADO')) status = 'CANCELADO';
-          else if (cleanBlock.includes('AGUARDANDO')) status = 'AGUARDANDO ATENDIMENTO';
-          else status = 'DEFERIDO';
+        // 1. Definição estrita do Status
+        let status = 'DEFERIDO';
+        if (/\bCANCELADO\b/i.test(chunk)) {
+          status = 'CANCELADO';
+        } else if (/\bAGUARDANDO\b/i.test(chunk)) {
+          status = 'AGUARDANDO ATENDIMENTO';
+        } else if (/\bDEFERIDO\b/i.test(chunk)) {
+          status = 'DEFERIDO';
         }
 
-        const descricao = getFieldValue(cleanBlock, 'Descrição|Reserva para Disciplina') || 'Reserva de Espaço';
-        const obs = getFieldValue(cleanBlock, 'Obs\\.|Obs\\. reserva|Observação');
-
-        if (data || pessoa || blocoSala) {
-          reservas.push({
-            id: idx + 1,
-            data: data || '',
-            pessoa: pessoa || 'Não informada',
-            horaInicio: horaInicio || '19:00:00',
-            horaFim: horaFim || '22:35:00',
-            blocoSala: blocoSala || 'Espaço Geral',
-            status: (status || 'DEFERIDO').toUpperCase(),
-            descricao: descricao || 'Reserva de Espaço',
-            obs: obs || '',
-            selected: (status || '').toUpperCase() === 'DEFERIDO'
-          });
+        // 2. Extração da Data
+        let data = '';
+        const dateMatch = chunk.match(/Data (?:da reserva)?:\s*(\d{2}\/\d{2}\/20\d{2})/i) || chunk.match(/\b(\d{2}\/\d{2}\/20\d{2})\b/);
+        if (dateMatch) {
+          data = dateMatch[1];
         }
-      });
+
+        // 3. Horários de Inicio e Fim
+        let horaInicio = '19:00:00';
+        let horaFim = '22:35:00';
+        const hIniMatch = chunk.match(/Hora inicial:\s*(\d{2}:\d{2}(?::\d{2})?)/i);
+        const hFimMatch = chunk.match(/Hora final:\s*(\d{2}:\d{2}(?::\d{2})?)/i);
+
+        if (hIniMatch) horaInicio = hIniMatch[1];
+        if (hFimMatch) horaFim = hFimMatch[1];
+
+        // Normalização HH:MM:SS
+        if (horaInicio.length === 5) horaInicio += ':00';
+        if (horaFim.length === 5) horaFim += ':00';
+
+        // 4. Bloco e Sala
+        let blocoSala = '';
+        const blocoMatch = chunk.match(/((?:BLOCO|CENTRO DE CONVIVENCIA|AUDITORIO)\s+[A-Z0-9/\s\-_]+?)(?=\s+(?:Pessoa|Data|Hora|Status|Descrição|Reserva|Recurso|Patrimônios|Obs|Quantidade|\d{2}\/\d{2})|$)/i) ||
+                           chunk.match(/Bloco\/Sala:\s*([^:]+?)(?=\s+(?:Hora|Status|Descrição|Reserva|Pessoa|Data)|$)/i);
+        if (blocoMatch) {
+          blocoSala = blocoMatch[1].trim();
+        }
+        if (!blocoSala) blocoSala = 'Espaço Geral';
+
+        // 5. Descrição / Disciplina
+        let descricao = 'Reserva de Espaço';
+        const descMatch = chunk.match(/Reserva para Disciplina:\s*(.*?)(?=\s+(?:Dados|Recurso|Patrimônios|Hora|Status|Pessoa|Data|Bloco|Obs|Quantidade|\d{2}\/\d{2})|$)/i) ||
+                          chunk.match(/Descrição:\s*(.*?)(?=\s+(?:Dados|Recurso|Patrimônios|Hora|Status|Pessoa|Data|Bloco|Obs|Quantidade|\d{2}\/\d{2})|$)/i);
+        if (descMatch) {
+          descricao = descMatch[1].trim();
+        }
+
+        descricao = descricao.replace(/Bloco\/Sala:.*$/i, '').trim();
+
+        reservas.push({
+          id: i + 1,
+          data: data || 'Data n/d',
+          pessoa: current.person,
+          horaInicio: horaInicio,
+          horaFim: horaFim,
+          blocoSala: blocoSala,
+          status: status,
+          descricao: descricao,
+          selected: status === 'DEFERIDO'
+        });
+      }
 
       return reservas;
     }
@@ -322,7 +399,7 @@
       tbody.innerHTML = '';
 
       const searchTerm = (document.getElementById('searchInput')?.value || '').toLowerCase();
-      const statusFilter = document.getElementById('statusFilter')?.value || 'TODOS';
+      const statusFilter = document.getElementById('statusFilter')?.value || 'DEFERIDO';
 
       let visibleCount = 0;
       let visibleSelectedCount = 0;
@@ -346,16 +423,19 @@
 
         const tr = document.createElement('tr');
         tr.innerHTML = `
-          <td>
+          <td class="col-check">
             <input type="checkbox" class="reserva-check" ${res.selected ? 'checked' : ''} onchange="toggleSelect(${res.id}, this.checked)">
           </td>
-          <td><strong>${res.data || '-'}</strong><br><small class="text-muted">${res.horaInicio} - ${res.horaFim}</small></td>
-          <td><strong>${res.blocoSala || '-'}</strong></td>
-          <td><small>${res.pessoa || '-'}</small></td>
-          <td><small>${res.descricao || '-'}${res.obs ? '<br><em>Obs: ' + res.obs + '</em>' : ''}</small></td>
-          <td><span class="badge ${badgeClass}">${res.status}</span></td>
-          <td class="text-center">
-            <a href="${googleLink}" target="_blank" class="btn btn-sm btn-outline-primary" title="Adicionar diretamente no Google Agenda">
+          <td class="col-data">
+            <strong>${res.data}</strong><br>
+            <small class="text-muted">${res.horaInicio.slice(0,5)} - ${res.horaFim.slice(0,5)}</small>
+          </td>
+          <td class="col-local"><strong>${res.blocoSala}</strong></td>
+          <td class="col-pessoa"><small>${res.pessoa}</small></td>
+          <td class="col-desc"><small>${res.descricao}</small></td>
+          <td class="col-status"><span class="badge-status ${badgeClass}">${res.status}</span></td>
+          <td class="col-acao text-center">
+            <a href="${googleLink}" target="_blank" class="btn btn-sm btn-outline-primary" title="Adicionar no Google Agenda">
               <i class="fa-regular fa-calendar-plus"></i>
             </a>
           </td>
@@ -379,7 +459,7 @@
 
     function selectAll(check) {
       const searchTerm = (document.getElementById('searchInput')?.value || '').toLowerCase();
-      const statusFilter = document.getElementById('statusFilter')?.value || 'TODOS';
+      const statusFilter = document.getElementById('statusFilter')?.value || 'DEFERIDO';
 
       listReservas.forEach(res => {
         const matchesSearch = (res.pessoa || '').toLowerCase().includes(searchTerm) ||
@@ -419,7 +499,7 @@
       
       const dates = `${y}${m.padStart(2,'0')}${d.padStart(2,'0')}T${hStart}/${y}${m.padStart(2,'0')}${d.padStart(2,'0')}T${hEnd}`;
       const title = encodeURIComponent(`Reserva: ${res.blocoSala || 'Espaço'}`);
-      const details = encodeURIComponent(`Pessoa: ${res.pessoa}\nDescrição: ${res.descricao}\nObservação: ${res.obs}\nStatus: ${res.status}`);
+      const details = encodeURIComponent(`Pessoa: ${res.pessoa}\nDescrição: ${res.descricao}\nStatus: ${res.status}`);
       const location = encodeURIComponent(res.blocoSala || '');
 
       return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${dates}&details=${details}&location=${location}&ctz=America/Sao_Paulo`;
@@ -487,7 +567,7 @@
             return;
           }
           accessToken = resp.access_token;
-          alert('Conectado com sucesso ao Google Agenda! Você já pode cadastrar as reservas.');
+          alert('Conectado com sucesso ao Google Agenda!');
         }
       });
       tokenClient.requestAccessToken({ prompt: 'consent' });
@@ -524,7 +604,7 @@
           const event = {
             summary: `Reserva: ${res.blocoSala}`,
             location: res.blocoSala,
-            description: `Pessoa: ${res.pessoa}\nDescrição: ${res.descricao}\nObservação: ${res.obs}\nStatus: ${res.status}`,
+            description: `Pessoa: ${res.pessoa}\nDescrição: ${res.descricao}\nStatus: ${res.status}`,
             start: { dateTime: startIso, timeZone: 'America/Sao_Paulo' },
             end: { dateTime: endIso, timeZone: 'America/Sao_Paulo' }
           };

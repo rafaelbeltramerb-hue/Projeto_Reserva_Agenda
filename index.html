@@ -48,7 +48,6 @@
       border: 1px solid #dee2e6;
       border-radius: 8px;
     }
-    /* Tabela Estrita para evitar quebras de layout */
     .table-custom {
       width: 100%;
       table-layout: fixed;
@@ -58,14 +57,14 @@
       vertical-align: middle;
       word-wrap: break-word;
       white-space: normal;
-      font-size: 0.9rem;
+      font-size: 0.875rem;
     }
     .col-check { width: 40px; }
     .col-data { width: 140px; }
     .col-local { width: 220px; }
     .col-pessoa { width: 200px; }
     .col-desc { width: auto; }
-    .col-status { width: 140px; }
+    .col-status { width: 130px; }
     .col-acao { width: 60px; }
 
     .badge-status {
@@ -234,21 +233,26 @@
           const page = await pdf.getPage(i);
           const textContent = await page.getTextContent();
           
-          const linesMap = {};
+          // Agrupa elementos de texto pela coordenada Y considerando pequenas variações (3px)
+          const lines = [];
           (textContent.items || []).forEach(item => {
-            if (!item || typeof item.str !== 'string') return;
-            const y = Math.round(item.transform[5]);
-            if (!linesMap[y]) linesMap[y] = [];
-            linesMap[y].push(item);
+            if (!item || typeof item.str !== 'string' || !item.str.trim()) return;
+            const y = item.transform[5];
+            const x = item.transform[4];
+            
+            let foundLine = lines.find(l => Math.abs(l.y - y) < 3);
+            if (!foundLine) {
+              foundLine = { y: y, items: [] };
+              lines.push(foundLine);
+            }
+            foundLine.items.push({ x: x, str: item.str });
           });
 
-          const sortedYs = Object.keys(linesMap).map(Number).sort((a, b) => b - a);
-          const pageText = sortedYs.map(y => {
-            return linesMap[y]
-              .sort((a, b) => a.transform[4] - b.transform[4])
-              .map(i => (i.str || '').trim())
-              .filter(s => s.length > 0)
-              .join(' ');
+          // Ordena linhas de cima para baixo e itens da esquerda para a direita
+          lines.sort((a, b) => b.y - a.y);
+          const pageText = lines.map(line => {
+            line.items.sort((a, b) => a.x - b.x);
+            return line.items.map(i => i.str.trim()).join(' ');
           }).join('\n');
 
           fullText += pageText + '\n';
@@ -271,7 +275,6 @@
       }
     }
 
-    // Limpa ruídos de cabeçalho e rodapé mantendo a estrutura do documento
     function sanitizePDFText(text) {
       if (!text) return '';
       return text
@@ -279,51 +282,52 @@
         .replace(/Agenda de Reservas\s*-\s*Analítico[^\n]*/gi, '')
         .replace(/Campus:[^\n]*/gi, '')
         .replace(/Impresso por:[^\n]*/gi, '')
+        .replace(/pág\.\s*\d+\s*de\s*\d+[^\n]*/gi, '')
         .replace(/pag\.\s*\d+\s*de\s*\d+[^\n]*/gi, '');
     }
 
-    // Extração baseada em isolamento de blocos individuais de reserva
     function parsePDFText(rawText) {
       if (!rawText || typeof rawText !== 'string') return [];
 
       const cleanText = sanitizePDFText(rawText);
 
-      // 1. Dividir o texto em blocos de reservas individuais
-      let rawBlocks = [];
-      if (/Dados da Reserva|Reserva\s*nº|Reserva\s*#/i.test(cleanText)) {
-        rawBlocks = cleanText.split(/(?:Dados da Reserva|Reserva\s*nº\s*\d*|Reserva\s*#\s*\d*)/gi);
-      } else if (/Data\s+(?:da\s+reserva)?:\s*\d{2}\/\d{2}\/\d{4}/i.test(cleanText)) {
-        rawBlocks = cleanText.split(/(?=Data\s+(?:da\s+reserva)?:\s*\d{2}\/\d{2}\/\d{4})/gi);
-      } else {
-        rawBlocks = cleanText.split(/\n\s*\n/);
+      // Divisão precisa utilizando a palavra Pessoa/Solicitante como marcador de início de bloco
+      let rawBlocks = cleanText.split(/(?=(?:Pessoa|Solicitante):\s*)/gi);
+      if (rawBlocks.length <= 1) {
+        rawBlocks = cleanText.split(/(?=(?:Data\s+(?:da\s+reserva)?:\s*\d{2}\/\d{2}\/\d{4}))/gi);
       }
-
-      const blocks = rawBlocks.map(b => b.trim()).filter(b => b.length > 15);
-      if (blocks.length === 0) return [];
 
       const reservas = [];
 
-      blocks.forEach((block, idx) => {
-        // Data
-        let data = '';
+      rawBlocks.forEach((block) => {
+        // Validação: o bloco precisa ter uma Data de Reserva válida
         const dateMatch = block.match(/Data\s+(?:da\s+reserva)?:\s*(\d{2}\/\d{2}\/20\d{2})/i) || block.match(/\b(\d{2}\/\d{2}\/20\d{2})\b/);
-        if (dateMatch) data = dateMatch[1];
+        if (!dateMatch) return;
 
-        // Horários de Inicio e Fim
-        let horaInicio = '19:00:00';
-        let horaFim = '22:35:00';
-        const hIniMatch = block.match(/Hora\s+inicial:\s*(\d{2}:\d{2}(?::\d{2})?)/i) || block.match(/\b(\d{2}:\d{2})\s*(?:às|-|a)\s*(\d{2}:\d{2})\b/i);
-        
-        if (hIniMatch) {
-          if (hIniMatch.length > 2 && hIniMatch[2]) {
-            horaInicio = hIniMatch[1];
-            horaFim = hIniMatch[2];
-          } else {
-            horaInicio = hIniMatch[1];
-            const hFimMatch = block.match(/Hora\s+final:\s*(\d{2}:\d{2}(?::\d{2})?)/i);
-            if (hFimMatch) horaFim = hFimMatch[1];
+        const data = dateMatch[1];
+
+        // Pessoa / Solicitante
+        let pessoa = '';
+        const pMatch = block.match(/(?:Pessoa|Solicitante):\s*([^:\n]+?)(?=\s+Dados|\s+Data|\n|$)/i);
+        if (pMatch) {
+          pessoa = pMatch[1].trim();
+        } else {
+          const pCand = block.match(/\b(\d{4,7}\s*[-–]\s*[A-ZÁÉÍÓÚÂÊÔÃÕÇ\s]{3,})\b/);
+          if (pCand && !/Disciplina|Curso|Reserva/i.test(pCand[1])) {
+            pessoa = pCand[1].trim();
           }
         }
+        pessoa = pessoa.replace(/\s+(Dados|Data|Hora|Bloco|Status|Descrição|Recurso).*$/i, '').trim();
+        if (!pessoa) pessoa = 'Não informada';
+
+        // Horários
+        let horaInicio = '19:00:00';
+        let horaFim = '22:35:00';
+        const hIniMatch = block.match(/Hora\s+inicial:\s*(\d{2}:\d{2}(?::\d{2})?)/i);
+        const hFimMatch = block.match(/Hora\s+final:\s*(\d{2}:\d{2}(?::\d{2})?)/i);
+        
+        if (hIniMatch) horaInicio = hIniMatch[1];
+        if (hFimMatch) horaFim = hFimMatch[1];
 
         if (horaInicio.length === 5) horaInicio += ':00';
         if (horaFim.length === 5) horaFim += ':00';
@@ -338,53 +342,37 @@
           status = 'DEFERIDO';
         }
 
-        // Pessoa / Solicitante
-        let pessoa = '';
-        const pMatch = block.match(/(?:Pessoa|Solicitante):\s*([^:\n]+?)(?=\s+(?:Data|Hora|Bloco|Sala|Local|Status|Descrição|Disciplina|Reserva|Recurso|Patrimônio)|$|\n)/i);
-        if (pMatch) {
-          pessoa = pMatch[1].trim();
-        } else {
-          const pCand = block.match(/\b(\d{4,7}\s*[-–]\s*[A-ZÁÉÍÓÚÂÊÔÃÕÇ\s]{3,})\b/);
-          if (pCand && !/Disciplina|Curso|Reserva/i.test(pCand[1])) {
-            pessoa = pCand[1].trim();
-          }
-        }
-        pessoa = pessoa.replace(/\s+(Recurso|Data|Hora|Bloco|Sala|Status|Descrição|Quantidade|Patrimônios).*$/i, '').trim();
-        if (!pessoa) pessoa = 'Não informada';
-
         // Bloco e Sala
         let blocoSala = '';
-        const bMatch = block.match(/(?:Bloco\/Sala|Bloco|Sala|Local|Espaço|Recurso):\s*([^:\n]+?)(?=\s+(?:Hora|Data|Status|Descrição|Disciplina|Reserva|Pessoa|Solicitante|Recurso|Patrimônio)|$|\n)/i);
+        const bMatch = block.match(/Bloco\/Sala:\s*([^:\n]+?)(?=\s+Status:|\s+Descrição:|\n|$)/i);
         if (bMatch) {
           blocoSala = bMatch[1].trim();
         } else {
-          const bCand = block.match(/\b((?:BLOCO|CENTRO DE CONVIVENCIA|AUDITORIO|LAB|LABORATORIO)\s+[A-Z0-9/\s\-_]+?)(?=\s+(?:Pessoa|Data|Hora|Status|Descrição|Disciplina|Reserva|Recurso|Obs|\d{2}\/\d{2})|$|\n)/i);
+          const bCand = block.match(/\b((?:BLOCO|CENTRO|AUDITORIO|LAB|LABORATORIO)\s+[A-Z0-9/\s\-_]+?)(?=\s+Status|\s+Descrição|\n|$)/i);
           if (bCand) blocoSala = bCand[1].trim();
         }
-        blocoSala = blocoSala.replace(/\s+(Pessoa|Data|Hora|Status|Descrição|Disciplina|Reserva).*$/i, '').trim();
+        blocoSala = blocoSala.replace(/\s+(Status|Descrição|Pessoa|Data|Hora).*$/i, '').trim();
         if (!blocoSala) blocoSala = 'Espaço Geral';
 
         // Descrição / Disciplina
         let descricao = 'Reserva de Espaço';
-        const descMatch = block.match(/(?:Reserva para Disciplina|Descrição|Disciplina):\s*([^:\n]+?)(?=\s+(?:Data|Hora|Bloco|Sala|Local|Status|Pessoa|Solicitante|Recurso|Patrimônio)|$|\n)/i);
+        const descMatch = block.match(/(?:Reserva para Disciplina|Descrição|Disciplina):\s*([^:\n]+?)(?=\s+Recurso|\n|$)/i);
         if (descMatch) {
           descricao = descMatch[1].trim();
         }
-        descricao = descricao.replace(/\s+(Bloco\/Sala|Local|Pessoa|Data|Hora|Status).*$/i, '').trim();
+        descricao = descricao.replace(/\s+(Recurso|Quantidade|Patrimônios|Patrimônio).*$/i, '').trim();
 
-        if (data) {
-          reservas.push({
-            id: idx + 1,
-            data: data,
-            pessoa: pessoa,
-            horaInicio: horaInicio,
-            horaFim: horaFim,
-            blocoSala: blocoSala,
-            status: status,
-            descricao: descricao,
-            selected: status === 'DEFERIDO'
-          });
-        }
+        reservas.push({
+          id: reservas.length + 1,
+          data: data,
+          pessoa: pessoa,
+          horaInicio: horaInicio,
+          horaFim: horaFim,
+          blocoSala: blocoSala,
+          status: status,
+          descricao: descricao,
+          selected: status === 'DEFERIDO'
+        });
       });
 
       return reservas;
@@ -456,7 +444,6 @@
       updateSelectedCount();
     }
 
-    // Otimizado: atualiza estado de seleção sem re-renderizar a DOM completa
     function toggleSelect(id, isChecked) {
       const res = listReservas.find(r => r.id === id);
       if (res) res.selected = isChecked;
@@ -620,7 +607,6 @@
           const hStart = formatTime(res.horaInicio, '19:00:00');
           const hEnd = formatTime(res.horaFim, '22:35:00');
 
-          // Formato ISO sem o sufixo duplicado de fuso
           const startIso = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}T${hStart.slice(0,2)}:${hStart.slice(2,4)}:${hStart.slice(4,6)}`;
           const endIso = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}T${hEnd.slice(0,2)}:${hEnd.slice(2,4)}:${hEnd.slice(4,6)}`;
 

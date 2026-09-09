@@ -126,7 +126,7 @@
               <th>Pessoa / Solicitante</th>
               <th>Descrição / Disciplina</th>
               <th>Status</th>
-              <th text-align="center">Ação</th>
+              <th class="text-center">Ação</th>
             </tr>
           </thead>
           <tbody id="reservasTableBody">
@@ -227,45 +227,56 @@
         }
 
         listReservas = parsePDFText(fullText);
-        renderTable();
-
-        document.getElementById('loadingSpinner').classList.add('d-none');
-        document.getElementById('resultsSection').classList.remove('d-none');
+        
+        if (listReservas.length === 0) {
+          alert('Nenhuma reserva foi encontrada no arquivo PDF.');
+        } else {
+          renderTable();
+          document.getElementById('resultsSection').classList.remove('d-none');
+        }
 
       } catch (err) {
         console.error(err);
         alert('Erro ao processar o arquivo PDF: ' + err.message);
+      } finally {
         document.getElementById('loadingSpinner').classList.add('d-none');
       }
     }
 
-    // Parser dos dados estruturados do Relatório da UNOESC
+    // Parser corrigido e robusto dos dados do Relatório
     function parsePDFText(text) {
-      const blocks = text.split(/Dados da Reserva/gi).slice(1);
+      const blocks = text.split(/(?:Dados da Reserva|Reserva nº|Reserva #)/gi);
+      const rawBlocks = blocks.length > 1 ? blocks.slice(1) : [text];
       const reservas = [];
 
-      blocks.forEach((block, idx) => {
-        const cleanBlock = block.replace(/\n/g, ' ');
+      // Função auxiliar para extração de campos baseada em rótulos
+      const getFieldValue = (blockStr, labelPattern) => {
+        const nextLabels = '(?:Pessoa|Data|Hora|Bloco|Sala|Status|Descrição|Obs|Recurso|Patrimônio)';
+        const regex = new RegExp(`${labelPattern}\\s*:?\\s*(.*?)(?=\\s+${nextLabels}\\s*:|$)`, 'i');
+        const match = blockStr.match(regex);
+        return match ? match[1].trim() : '';
+      };
 
-        const pessoaMatch = cleanBlock.match(/Pessoa:\s*([0-9]+\s*-\s*[^Data|Hora|Bloco|Status|Descrição]+?)(?=\s+(?:Data|Hora|Bloco|Status|Descrição)|$)/i) || cleanBlock.match(/Pessoa:\s*([^Data|Hora|Bloco|Status]+)/i);
-        const dataMatch = cleanBlock.match(/Data da reserva:\s*(\d{2}\/\d{2}\/\d{4})/i);
-        const horaInicioMatch = cleanBlock.match(/Hora inicial:\s*(\d{2}:\d{2}(?::\d{2})?)/i);
-        const horaFimMatch = cleanBlock.match(/Hora final:\s*(\d{2}:\d{2}(?::\d{2})?)/i);
-        const blocoSalaMatch = cleanBlock.match(/Bloco\/Sala:\s*([^Hora|Status|Descrição|Recurso|Obs]+?)(?=\s+(?:Hora|Status|Descrição|Recurso|Obs|Data)|$)/i);
-        const statusMatch = cleanBlock.match(/Status:\s*(DEFERIDO|CANCELADO|AGUARDANDO ATENDIMENTO)/i);
-        const descMatch = cleanBlock.match(/Descrição:\s*([^Data|Hora|Bloco|Status|Recurso|Obs]+?)(?=\s+(?:Data|Hora|Bloco|Status|Recurso|Obs)|$)/i);
-        const obsMatch = cleanBlock.match(/Obs\.\s*reserva:\s*([^Recurso|Patrimônio]+?)(?=\s+(?:Recurso|Patrimônio)|$)/i);
+      rawBlocks.forEach((block, idx) => {
+        const cleanBlock = block.replace(/\s+/g, ' ');
 
-        const data = dataMatch ? dataMatch[1].trim() : '';
-        const pessoa = pessoaMatch ? pessoaMatch[1].trim() : '';
-        const horaInicio = horaInicioMatch ? horaInicioMatch[1].trim() : '';
-        const horaFim = horaFimMatch ? horaFimMatch[1].trim() : '';
-        const blocoSala = blocoSalaMatch ? blocoSalaMatch[1].trim() : '';
-        const status = statusMatch ? statusMatch[1].trim() : 'DEFERIDO';
-        const descricao = descMatch ? descMatch[1].trim() : '';
-        const obs = obsMatch ? obsMatch[1].trim() : '';
+        const data = getFieldValue(cleanBlock, 'Data(?: da reserva)?');
+        const horaInicio = getFieldValue(cleanBlock, 'Hora inicial');
+        const horaFim = getFieldValue(cleanBlock, 'Hora final');
+        const pessoa = getFieldValue(cleanBlock, 'Pessoa');
+        const blocoSala = getFieldValue(cleanBlock, 'Bloco\\/Sala|Bloco|Sala');
+        let status = getFieldValue(cleanBlock, 'Status');
+        const descricao = getFieldValue(cleanBlock, 'Descrição');
+        const obs = getFieldValue(cleanBlock, 'Obs\\.|Obs\\. reserva|Observação');
 
-        if (data && (pessoa || blocoSala)) {
+        if (!status) {
+          if (cleanBlock.includes('DEFERIDO')) status = 'DEFERIDO';
+          else if (cleanBlock.includes('CANCELADO')) status = 'CANCELADO';
+          else if (cleanBlock.includes('AGUARDANDO')) status = 'AGUARDANDO ATENDIMENTO';
+          else status = 'DEFERIDO';
+        }
+
+        if (data || pessoa || blocoSala) {
           reservas.push({
             id: idx + 1,
             data,
@@ -273,15 +284,25 @@
             horaInicio,
             horaFim,
             blocoSala,
-            status,
+            status: status.toUpperCase(),
             descricao,
             obs,
-            selected: status === 'DEFERIDO' // Seleciona automaticamente apenas se for DEFERIDO
+            selected: status.toUpperCase() === 'DEFERIDO'
           });
         }
       });
 
       return reservas;
+    }
+
+    // Formata o horário garantindo o padrão HHMMSS para links e arquivos ICS
+    function formatTime(timeStr, defaultTime) {
+      const t = timeStr || defaultTime;
+      const parts = t.split(':');
+      const h = (parts[0] || '00').padStart(2, '0');
+      const m = (parts[1] || '00').padStart(2, '0');
+      const s = (parts[2] || '00').padStart(2, '0');
+      return `${h}${m}${s}`;
     }
 
     // Renderiza a Tabela de Resultados
@@ -292,6 +313,9 @@
       const searchTerm = document.getElementById('searchInput').value.toLowerCase();
       const statusFilter = document.getElementById('statusFilter').value;
 
+      let visibleCount = 0;
+      let visibleSelectedCount = 0;
+
       listReservas.forEach(res => {
         const matchesSearch = res.pessoa.toLowerCase().includes(searchTerm) ||
                               res.blocoSala.toLowerCase().includes(searchTerm) ||
@@ -299,6 +323,9 @@
         const matchesStatus = statusFilter === 'TODOS' || res.status === statusFilter;
 
         if (!matchesSearch || !matchesStatus) return;
+
+        visibleCount++;
+        if (res.selected) visibleSelectedCount++;
 
         let badgeClass = 'badge-deferido';
         if (res.status === 'CANCELADO') badgeClass = 'badge-cancelado';
@@ -311,10 +338,10 @@
           <td>
             <input type="checkbox" class="reserva-check" ${res.selected ? 'checked' : ''} onchange="toggleSelect(${res.id}, this.checked)">
           </td>
-          <td><strong>${res.data}</strong><br><small class="text-muted">${res.horaInicio} - ${res.horaFim}</small></td>
-          <td><strong>${res.blocoSala}</strong></td>
-          <td><small>${res.pessoa}</small></td>
-          <td><small>${res.descricao}${res.obs ? ' <br><em>Obs: ' + res.obs + '</em>' : ''}</small></td>
+          <td><strong>${res.data}</strong><br><small class="text-muted">${res.horaInicio || '19:00'} - ${res.horaFim || '22:35'}</small></td>
+          <td><strong>${res.blocoSala || '-'}</strong></td>
+          <td><small>${res.pessoa || '-'}</small></td>
+          <td><small>${res.descricao || '-'}${res.obs ? ' <br><em>Obs: ' + res.obs + '</em>' : ''}</small></td>
           <td><span class="badge ${badgeClass}">${res.status}</span></td>
           <td class="text-center">
             <a href="${googleLink}" target="_blank" class="btn btn-sm btn-outline-primary" title="Adicionar diretamente no Google Agenda">
@@ -325,17 +352,34 @@
         tbody.appendChild(tr);
       });
 
+      const headerCheck = document.getElementById('checkAllHeader');
+      if (headerCheck) {
+        headerCheck.checked = visibleCount > 0 && visibleSelectedCount === visibleCount;
+      }
+
       updateSelectedCount();
     }
 
     function toggleSelect(id, isChecked) {
       const res = listReservas.find(r => r.id === id);
       if (res) res.selected = isChecked;
-      updateSelectedCount();
+      renderTable();
     }
 
     function selectAll(check) {
-      listReservas.forEach(res => res.selected = check);
+      const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+      const statusFilter = document.getElementById('statusFilter').value;
+
+      listReservas.forEach(res => {
+        const matchesSearch = res.pessoa.toLowerCase().includes(searchTerm) ||
+                              res.blocoSala.toLowerCase().includes(searchTerm) ||
+                              res.descricao.toLowerCase().includes(searchTerm);
+        const matchesStatus = statusFilter === 'TODOS' || res.status === statusFilter;
+
+        if (matchesSearch && matchesStatus) {
+          res.selected = check;
+        }
+      });
       renderTable();
     }
 
@@ -354,11 +398,14 @@
 
     // Gerador de Link Único do Google Agenda
     function getGoogleCalendarSingleUrl(res) {
-      const [d, m, y] = res.data.split('/');
-      const hStart = (res.horaInicio || '19:00:00').replace(/:/g, '').padEnd(6, '0').slice(0,6);
-      const hEnd = (res.horaFim || '22:35:00').replace(/:/g, '').padEnd(6, '0').slice(0,6);
+      const parts = res.data.split('/');
+      if (parts.length !== 3) return '#';
+      const [d, m, y] = parts;
       
-      const dates = `${y}${m}${d}T${hStart}/${y}${m}${d}T${hEnd}`;
+      const hStart = formatTime(res.horaInicio, '19:00:00');
+      const hEnd = formatTime(res.horaFim, '22:35:00');
+      
+      const dates = `${y}${m.padStart(2,'0')}${d.padStart(2,'0')}T${hStart}/${y}${m.padStart(2,'0')}${d.padStart(2,'0')}T${hEnd}`;
       const title = encodeURIComponent(`Reserva: ${res.blocoSala}`);
       const details = encodeURIComponent(`Pessoa: ${res.pessoa}\nDescrição: ${res.descricao}\nObservação: ${res.obs}\nStatus: ${res.status}`);
       const location = encodeURIComponent(res.blocoSala);
@@ -383,15 +430,19 @@
       ];
 
       selected.forEach(res => {
-        const [d, m, y] = res.data.split('/');
-        const hStart = (res.horaInicio || '19:00:00').replace(/:/g, '').padEnd(6, '0').slice(0,6);
-        const hEnd = (res.horaFim || '22:35:00').replace(/:/g, '').padEnd(6, '0').slice(0,6);
+        const parts = res.data.split('/');
+        if (parts.length !== 3) return;
+        const [d, m, y] = parts;
+
+        const hStart = formatTime(res.horaInicio, '19:00:00');
+        const hEnd = formatTime(res.horaFim, '22:35:00');
+        const dtFormatted = `${y}${m.padStart(2,'0')}${d.padStart(2,'0')}`;
 
         icsLines.push('BEGIN:VEVENT');
-        icsLines.push(`UID:unoesc-reserva-${res.id}-${y}${m}${d}@agenda`);
+        icsLines.push(`UID:unoesc-reserva-${res.id}-${dtFormatted}@agenda`);
         icsLines.push(`DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}Z`);
-        icsLines.push(`DTSTART;TZID=America/Sao_Paulo:${y}${m}${d}T${hStart}`);
-        icsLines.push(`DTEND;TZID=America/Sao_Paulo:${y}${m}${d}T${hEnd}`);
+        icsLines.push(`DTSTART;TZID=America/Sao_Paulo:${dtFormatted}T${hStart}`);
+        icsLines.push(`DTEND;TZID=America/Sao_Paulo:${dtFormatted}T${hEnd}`);
         icsLines.push(`SUMMARY:Reserva - ${res.blocoSala}`);
         icsLines.push(`LOCATION:${res.blocoSala}`);
         icsLines.push(`DESCRIPTION:Pessoa: ${res.pessoa}\\nDescrição: ${res.descricao}\\nStatus: ${res.status}`);
@@ -448,16 +499,22 @@
       let successCount = 0;
       for (const res of selected) {
         try {
-          const [d, m, y] = res.data.split('/');
-          const startIso = `${y}-${m}-${d}T${res.horaInicio.length === 5 ? res.horaInicio + ':00' : res.horaInicio}`;
-          const endIso = `${y}-${m}-${d}T${res.horaFim.length === 5 ? res.horaFim + ':00' : res.horaFim}`;
+          const parts = res.data.split('/');
+          if (parts.length !== 3) continue;
+          const [d, m, y] = parts;
+
+          const hStart = formatTime(res.horaInicio, '19:00:00');
+          const hEnd = formatTime(res.horaFim, '22:35:00');
+
+          const startIso = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}T${hStart.slice(0,2)}:${hStart.slice(2,4)}:${hStart.slice(4,6)}-03:00`;
+          const endIso = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}T${hEnd.slice(0,2)}:${hEnd.slice(2,4)}:${hEnd.slice(4,6)}-03:00`;
 
           const event = {
             summary: `Reserva: ${res.blocoSala}`,
             location: res.blocoSala,
             description: `Pessoa: ${res.pessoa}\nDescrição: ${res.descricao}\nObservação: ${res.obs}\nStatus: ${res.status}`,
-            start: { dateTime: new Date(startIso).toISOString(), timeZone: 'America/Sao_Paulo' },
-            end: { dateTime: new Date(endIso).toISOString(), timeZone: 'America/Sao_Paulo' }
+            start: { dateTime: startIso, timeZone: 'America/Sao_Paulo' },
+            end: { dateTime: endIso, timeZone: 'America/Sao_Paulo' }
           };
 
           const resp = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {

@@ -65,7 +65,7 @@
     .col-local { width: 220px; }
     .col-pessoa { width: 200px; }
     .col-desc { width: auto; }
-    .col-status { width: 130px; }
+    .col-status { width: 140px; }
     .col-acao { width: 60px; }
 
     .badge-status {
@@ -98,7 +98,7 @@
       <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
         <div>
           <h5 class="card-title mb-1"><i class="fa-brands fa-google me-2 text-primary"></i>Conexão com o Google Agenda</h5>
-          <small class="text-muted">Insira seu <strong>Client ID</strong> do Google Cloud ou utilize a exportação em <strong>.ICS</strong>.</small>
+          <small class="text-muted">Insira seu <strong>Client ID</strong> do Google Cloud Console ou utilize a exportação em <strong>.ICS</strong>.</small>
         </div>
         <div class="d-flex gap-2 align-items-center">
           <input type="text" id="clientIdInput" class="form-control form-control-sm" style="width: 280px;" placeholder="Seu Google Client ID (Opcional)">
@@ -141,7 +141,7 @@
         </div>
         <div class="col-md-5 text-end">
           <button class="btn btn-sm btn-outline-secondary me-1" onclick="selectAll(true)">Selecionar Visíveis</button>
-          <button class="btn btn-sm btn-outline-secondary me-2" onclick="selectAll(false)">Desmarcar Todos</button>
+          <button class="btn btn-sm btn-outline-secondary me-2" onclick="selectAll(false)">Desmarcar Visíveis</button>
         </div>
       </div>
 
@@ -271,7 +271,7 @@
       }
     }
 
-    // Remove ruídos de cabeçalho e rodapé do PDF
+    // Limpa ruídos de cabeçalho e rodapé mantendo a estrutura do documento
     function sanitizePDFText(text) {
       if (!text) return '';
       return text
@@ -279,108 +279,113 @@
         .replace(/Agenda de Reservas\s*-\s*Analítico[^\n]*/gi, '')
         .replace(/Campus:[^\n]*/gi, '')
         .replace(/Impresso por:[^\n]*/gi, '')
-        .replace(/pag\.\s*\d+\s*de\s*\d+[^\n]*/gi, '')
-        .replace(/\s+/g, ' ');
+        .replace(/pag\.\s*\d+\s*de\s*\d+[^\n]*/gi, '');
     }
 
-    // Algoritmo de Extração Precisão por Solicitante
+    // Extração baseada em isolamento de blocos individuais de reserva
     function parsePDFText(rawText) {
       if (!rawText || typeof rawText !== 'string') return [];
 
       const cleanText = sanitizePDFText(rawText);
 
-      // Localiza ocorrências de pessoas (Matrícula - Nome)
-      const personRegex = /(?:Pessoa:\s*)?(\b\d{4,7}\s*[-–]\s*[A-ZÁÉÍÓÚÂÊÔÃÕÇ\s]{3,})/gi;
-      const matches = [];
-      let match;
-
-      while ((match = personRegex.exec(cleanText)) !== null) {
-        let rawPerson = match[1].trim();
-        // Remove rótulos adicionais que possam ter ficado anexados ao nome
-        rawPerson = rawPerson.replace(/\s+(Recurso|Data|Hora|Bloco|Sala|Status|Descrição|Quantidade|Patrimônios).*$/i, '');
-        matches.push({
-          person: rawPerson,
-          index: match.index
-        });
+      // 1. Dividir o texto em blocos de reservas individuais
+      let rawBlocks = [];
+      if (/Dados da Reserva|Reserva\s*nº|Reserva\s*#/i.test(cleanText)) {
+        rawBlocks = cleanText.split(/(?:Dados da Reserva|Reserva\s*nº\s*\d*|Reserva\s*#\s*\d*)/gi);
+      } else if (/Data\s+(?:da\s+reserva)?:\s*\d{2}\/\d{2}\/\d{4}/i.test(cleanText)) {
+        rawBlocks = cleanText.split(/(?=Data\s+(?:da\s+reserva)?:\s*\d{2}\/\d{2}\/\d{4})/gi);
+      } else {
+        rawBlocks = cleanText.split(/\n\s*\n/);
       }
 
-      if (matches.length === 0) return [];
+      const blocks = rawBlocks.map(b => b.trim()).filter(b => b.length > 15);
+      if (blocks.length === 0) return [];
 
       const reservas = [];
 
-      for (let i = 0; i < matches.length; i++) {
-        const current = matches[i];
-        const startIndex = current.index;
-        const endIndex = (i + 1 < matches.length) ? matches[i + 1].index : cleanText.length;
-
-        // Janela de busca retroativa para capturar metadados do bloco
-        const backtrackStart = Math.max(0, startIndex - 250);
-        const prevLimit = (i > 0) ? matches[i - 1].index + 20 : 0;
-        const effectiveStart = Math.max(backtrackStart, prevLimit);
-
-        const chunk = cleanText.substring(effectiveStart, endIndex);
-
-        // 1. Definição estrita do Status
-        let status = 'DEFERIDO';
-        if (/\bCANCELADO\b/i.test(chunk)) {
-          status = 'CANCELADO';
-        } else if (/\bAGUARDANDO\b/i.test(chunk)) {
-          status = 'AGUARDANDO ATENDIMENTO';
-        } else if (/\bDEFERIDO\b/i.test(chunk)) {
-          status = 'DEFERIDO';
-        }
-
-        // 2. Extração da Data
+      blocks.forEach((block, idx) => {
+        // Data
         let data = '';
-        const dateMatch = chunk.match(/Data (?:da reserva)?:\s*(\d{2}\/\d{2}\/20\d{2})/i) || chunk.match(/\b(\d{2}\/\d{2}\/20\d{2})\b/);
-        if (dateMatch) {
-          data = dateMatch[1];
-        }
+        const dateMatch = block.match(/Data\s+(?:da\s+reserva)?:\s*(\d{2}\/\d{2}\/20\d{2})/i) || block.match(/\b(\d{2}\/\d{2}\/20\d{2})\b/);
+        if (dateMatch) data = dateMatch[1];
 
-        // 3. Horários de Inicio e Fim
+        // Horários de Inicio e Fim
         let horaInicio = '19:00:00';
         let horaFim = '22:35:00';
-        const hIniMatch = chunk.match(/Hora inicial:\s*(\d{2}:\d{2}(?::\d{2})?)/i);
-        const hFimMatch = chunk.match(/Hora final:\s*(\d{2}:\d{2}(?::\d{2})?)/i);
+        const hIniMatch = block.match(/Hora\s+inicial:\s*(\d{2}:\d{2}(?::\d{2})?)/i) || block.match(/\b(\d{2}:\d{2})\s*(?:às|-|a)\s*(\d{2}:\d{2})\b/i);
+        
+        if (hIniMatch) {
+          if (hIniMatch.length > 2 && hIniMatch[2]) {
+            horaInicio = hIniMatch[1];
+            horaFim = hIniMatch[2];
+          } else {
+            horaInicio = hIniMatch[1];
+            const hFimMatch = block.match(/Hora\s+final:\s*(\d{2}:\d{2}(?::\d{2})?)/i);
+            if (hFimMatch) horaFim = hFimMatch[1];
+          }
+        }
 
-        if (hIniMatch) horaInicio = hIniMatch[1];
-        if (hFimMatch) horaFim = hFimMatch[1];
-
-        // Normalização HH:MM:SS
         if (horaInicio.length === 5) horaInicio += ':00';
         if (horaFim.length === 5) horaFim += ':00';
 
-        // 4. Bloco e Sala
-        let blocoSala = '';
-        const blocoMatch = chunk.match(/((?:BLOCO|CENTRO DE CONVIVENCIA|AUDITORIO)\s+[A-Z0-9/\s\-_]+?)(?=\s+(?:Pessoa|Data|Hora|Status|Descrição|Reserva|Recurso|Patrimônios|Obs|Quantidade|\d{2}\/\d{2})|$)/i) ||
-                           chunk.match(/Bloco\/Sala:\s*([^:]+?)(?=\s+(?:Hora|Status|Descrição|Reserva|Pessoa|Data)|$)/i);
-        if (blocoMatch) {
-          blocoSala = blocoMatch[1].trim();
+        // Status
+        let status = 'DEFERIDO';
+        if (/\bCANCELADO\b/i.test(block)) {
+          status = 'CANCELADO';
+        } else if (/\bAGUARDANDO\b/i.test(block)) {
+          status = 'AGUARDANDO ATENDIMENTO';
+        } else if (/\bDEFERIDO\b/i.test(block)) {
+          status = 'DEFERIDO';
         }
+
+        // Pessoa / Solicitante
+        let pessoa = '';
+        const pMatch = block.match(/(?:Pessoa|Solicitante):\s*([^:\n]+?)(?=\s+(?:Data|Hora|Bloco|Sala|Local|Status|Descrição|Disciplina|Reserva|Recurso|Patrimônio)|$|\n)/i);
+        if (pMatch) {
+          pessoa = pMatch[1].trim();
+        } else {
+          const pCand = block.match(/\b(\d{4,7}\s*[-–]\s*[A-ZÁÉÍÓÚÂÊÔÃÕÇ\s]{3,})\b/);
+          if (pCand && !/Disciplina|Curso|Reserva/i.test(pCand[1])) {
+            pessoa = pCand[1].trim();
+          }
+        }
+        pessoa = pessoa.replace(/\s+(Recurso|Data|Hora|Bloco|Sala|Status|Descrição|Quantidade|Patrimônios).*$/i, '').trim();
+        if (!pessoa) pessoa = 'Não informada';
+
+        // Bloco e Sala
+        let blocoSala = '';
+        const bMatch = block.match(/(?:Bloco\/Sala|Bloco|Sala|Local|Espaço|Recurso):\s*([^:\n]+?)(?=\s+(?:Hora|Data|Status|Descrição|Disciplina|Reserva|Pessoa|Solicitante|Recurso|Patrimônio)|$|\n)/i);
+        if (bMatch) {
+          blocoSala = bMatch[1].trim();
+        } else {
+          const bCand = block.match(/\b((?:BLOCO|CENTRO DE CONVIVENCIA|AUDITORIO|LAB|LABORATORIO)\s+[A-Z0-9/\s\-_]+?)(?=\s+(?:Pessoa|Data|Hora|Status|Descrição|Disciplina|Reserva|Recurso|Obs|\d{2}\/\d{2})|$|\n)/i);
+          if (bCand) blocoSala = bCand[1].trim();
+        }
+        blocoSala = blocoSala.replace(/\s+(Pessoa|Data|Hora|Status|Descrição|Disciplina|Reserva).*$/i, '').trim();
         if (!blocoSala) blocoSala = 'Espaço Geral';
 
-        // 5. Descrição / Disciplina
+        // Descrição / Disciplina
         let descricao = 'Reserva de Espaço';
-        const descMatch = chunk.match(/Reserva para Disciplina:\s*(.*?)(?=\s+(?:Dados|Recurso|Patrimônios|Hora|Status|Pessoa|Data|Bloco|Obs|Quantidade|\d{2}\/\d{2})|$)/i) ||
-                          chunk.match(/Descrição:\s*(.*?)(?=\s+(?:Dados|Recurso|Patrimônios|Hora|Status|Pessoa|Data|Bloco|Obs|Quantidade|\d{2}\/\d{2})|$)/i);
+        const descMatch = block.match(/(?:Reserva para Disciplina|Descrição|Disciplina):\s*([^:\n]+?)(?=\s+(?:Data|Hora|Bloco|Sala|Local|Status|Pessoa|Solicitante|Recurso|Patrimônio)|$|\n)/i);
         if (descMatch) {
           descricao = descMatch[1].trim();
         }
+        descricao = descricao.replace(/\s+(Bloco\/Sala|Local|Pessoa|Data|Hora|Status).*$/i, '').trim();
 
-        descricao = descricao.replace(/Bloco\/Sala:.*$/i, '').trim();
-
-        reservas.push({
-          id: i + 1,
-          data: data || 'Data n/d',
-          pessoa: current.person,
-          horaInicio: horaInicio,
-          horaFim: horaFim,
-          blocoSala: blocoSala,
-          status: status,
-          descricao: descricao,
-          selected: status === 'DEFERIDO'
-        });
-      }
+        if (data) {
+          reservas.push({
+            id: idx + 1,
+            data: data,
+            pessoa: pessoa,
+            horaInicio: horaInicio,
+            horaFim: horaFim,
+            blocoSala: blocoSala,
+            status: status,
+            descricao: descricao,
+            selected: status === 'DEFERIDO'
+          });
+        }
+      });
 
       return reservas;
     }
@@ -451,10 +456,27 @@
       updateSelectedCount();
     }
 
+    // Otimizado: atualiza estado de seleção sem re-renderizar a DOM completa
     function toggleSelect(id, isChecked) {
       const res = listReservas.find(r => r.id === id);
       if (res) res.selected = isChecked;
-      renderTable();
+      
+      updateSelectedCount();
+      
+      const searchTerm = (document.getElementById('searchInput')?.value || '').toLowerCase();
+      const statusFilter = document.getElementById('statusFilter')?.value || 'DEFERIDO';
+      const visible = listReservas.filter(r => {
+        const matchesSearch = (r.pessoa || '').toLowerCase().includes(searchTerm) ||
+                              (r.blocoSala || '').toLowerCase().includes(searchTerm) ||
+                              (r.descricao || '').toLowerCase().includes(searchTerm);
+        const matchesStatus = statusFilter === 'TODOS' || r.status === statusFilter;
+        return matchesSearch && matchesStatus;
+      });
+      
+      const headerCheck = document.getElementById('checkAllHeader');
+      if (headerCheck) {
+        headerCheck.checked = visible.length > 0 && visible.every(r => r.selected);
+      }
     }
 
     function selectAll(check) {
@@ -598,8 +620,9 @@
           const hStart = formatTime(res.horaInicio, '19:00:00');
           const hEnd = formatTime(res.horaFim, '22:35:00');
 
-          const startIso = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}T${hStart.slice(0,2)}:${hStart.slice(2,4)}:${hStart.slice(4,6)}-03:00`;
-          const endIso = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}T${hEnd.slice(0,2)}:${hEnd.slice(2,4)}:${hEnd.slice(4,6)}-03:00`;
+          // Formato ISO sem o sufixo duplicado de fuso
+          const startIso = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}T${hStart.slice(0,2)}:${hStart.slice(2,4)}:${hStart.slice(4,6)}`;
+          const endIso = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}T${hEnd.slice(0,2)}:${hEnd.slice(2,4)}:${hEnd.slice(4,6)}`;
 
           const event = {
             summary: `Reserva: ${res.blocoSala}`,

@@ -76,6 +76,7 @@
     .badge-deferido { background-color: #198754; color: #fff; }
     .badge-cancelado { background-color: #dc3545; color: #fff; }
     .badge-aguardando { background-color: #ffc107; color: #000; }
+    .badge-outro { background-color: #6c757d; color: #fff; }
 
     .badge-periodo {
       font-size: 0.72rem;
@@ -489,6 +490,7 @@
 
         allReservas.forEach((r, idx) => { r.id = idx + 1; });
         listReservas = allReservas;
+        populateStatusFilter();
 
         if (listReservas.length === 0) {
           alert('Nenhuma reserva pôde ser identificada no PDF informado. Verifique se é o relatório "Agenda de Reservas - Sintético".');
@@ -518,7 +520,20 @@
       return 'status';
     }
 
-    const STATUS_RE = /^(DEFERIDO|CANCELADO|AGUARDANDO(?:\s+ATENDIMENTO)?)$/i;
+    // A coluna Status sempre tem exatamente 1 valor por linha de reserva
+    // (nunca mais de um). Em vez de reconhecer apenas os status já vistos
+    // (DEFERIDO/CANCELADO/AGUARDANDO ATENDIMENTO), tratamos QUALQUER texto
+    // não vazio da coluna Status como âncora de registro. Isso evita que um
+    // status novo/desconhecido (ex: "FALTA INCLUIR RECURSO") deixe de virar
+    // âncora e "contamine" a linha vizinha com seus dados (Data, Turno,
+    // Sala), o que fazia a linha seguinte ser descartada da listagem.
+    const KNOWN_STATUS_RE = /^(DEFERIDO|CANCELADO|AGUARDANDO(?:\s+ATENDIMENTO)?)$/i;
+    function isStatusAnchorText(str) {
+      const s = (str || '').trim();
+      if (!s) return false;
+      if (/^status$/i.test(s)) return false; // cabeçalho da coluna
+      return true;
+    }
 
     function joinColumnItems(arr) {
       arr.sort((a, b) => (a.y - b.y) || (a.x - b.x)); // topo->baixo, esquerda->direita
@@ -562,7 +577,7 @@
       const dynamicColOf = detectDynamicColumns(items);
       const getCol = dynamicColOf || colOf;
 
-      const statusItems = items.filter(it => getCol(it.x) === 'status' && STATUS_RE.test(it.str.trim()));
+      const statusItems = items.filter(it => getCol(it.x) === 'status' && isStatusAnchorText(it.str));
       if (statusItems.length === 0) return [];
 
       // Agrupa itens de status que porventura estejam quebrados em 2 (ex: "AGUARDANDO" + "ATENDIMENTO")
@@ -627,6 +642,23 @@
       }).filter(r => /^\d{2}\/\d{2}\/\d{4}$/.test(r.data)); // descarta linhas sem data válida (ex: ruído)
     }
 
+    // Garante que status inéditos (ex: "FALTA INCLUIR RECURSO") também
+    // apareçam como opção de filtro, além dos 3 status já conhecidos.
+    function populateStatusFilter() {
+      const select = document.getElementById('statusFilter');
+      const existing = new Set(Array.from(select.options).map(o => o.value));
+      const distinctStatus = [...new Set(listReservas.map(r => r.status))];
+
+      distinctStatus.forEach(status => {
+        if (!existing.has(status)) {
+          const opt = document.createElement('option');
+          opt.value = status;
+          opt.textContent = `Somente ${status}`;
+          select.appendChild(opt);
+        }
+      });
+    }
+
     function renderTable() {
       const tbody = document.getElementById('reservasTableBody');
       tbody.innerHTML = '';
@@ -650,9 +682,10 @@
       }
 
       visibleList.forEach(res => {
-        let badgeClass = 'badge-deferido';
-        if (res.status === 'CANCELADO') badgeClass = 'badge-cancelado';
-        if (res.status === 'AGUARDANDO ATENDIMENTO') badgeClass = 'badge-aguardando';
+        let badgeClass = 'badge-outro';
+        if (res.status === 'DEFERIDO') badgeClass = 'badge-deferido';
+        else if (res.status.includes('CANCEL')) badgeClass = 'badge-cancelado';
+        else if (res.status.includes('AGUARDANDO')) badgeClass = 'badge-aguardando';
 
         const gCalUrl = getGoogleCalendarSingleUrl(res);
         const periodoLabel = turnoToPeriodoLabel(res.turno);

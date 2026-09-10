@@ -111,6 +111,9 @@
     <button type="button" class="btn btn-sm btn-light position-absolute top-0 end-0 m-3 shadow-sm" onclick="openConfigModal()" title="Configurar Google OAuth Client ID">
       <i class="fa-solid fa-gear me-1"></i>Configurar Google API
     </button>
+    <button type="button" id="googleConnBadge" class="btn btn-sm btn-outline-light position-absolute top-0 start-0 m-3 shadow-sm" onclick="connectGoogleAccount()">
+      <i class="fa-brands fa-google me-1"></i>Conectar ao Google
+    </button>
   </header>
 
   <div class="container-fluid px-4 mb-5">
@@ -138,6 +141,12 @@
         <span class="badge-periodo periodo-noite"><i class="fa-solid fa-moon me-1"></i>À noite</span>
         <span class="badge-periodo periodo-misto"><i class="fa-solid fa-clock me-1"></i>Manhã e tarde / Tarde e noite</span>
       </div>
+    </div>
+
+    <!-- Aviso de conexão pendente -->
+    <div id="notConnectedBanner" class="alert alert-warning d-none mb-3" role="alert">
+      <i class="fa-solid fa-triangle-exclamation me-1"></i>
+      Conecte-se ao Google (botão no canto superior esquerdo) para ver quais reservas já estão na agenda, quais mudaram e quais foram canceladas — antes de sincronizar.
     </div>
 
     <!-- Painel de Filtros -->
@@ -183,13 +192,14 @@
               <th style="width: 190px;">Solicitante</th>
               <th style="width: 170px;">Recurso</th>
               <th style="width: 220px;">Observação</th>
-              <th style="width: 110px;">Status</th>
+              <th style="width: 110px;">Status Educare</th>
+              <th style="width: 150px;">Sincronização</th>
               <th style="width: 80px;" class="text-center">1-Clique</th>
             </tr>
           </thead>
           <tbody id="reservasTableBody">
             <tr>
-              <td colspan="9" class="text-center text-muted py-4">Nenhum arquivo PDF carregado ainda. Selecione um PDF acima.</td>
+              <td colspan="10" class="text-center text-muted py-4">Nenhum arquivo PDF carregado ainda. Selecione um PDF acima.</td>
             </tr>
           </tbody>
         </table>
@@ -226,9 +236,17 @@
         </div>
         <div class="modal-body">
           <p class="small text-muted mb-2">Informe o seu <strong>OAuth 2.0 Client ID</strong> do Google Cloud Console para autorizar o envio direto:</p>
-          <div class="mb-3">
+          <div id="configDefaultInfo" class="alert alert-success p-2 small mb-3 d-none">
+            <i class="fa-solid fa-circle-check me-1"></i>Esta página já vem com um Client ID padrão configurado — não é necessário preencher nada aqui, a menos que queira usar um Client ID diferente só neste navegador.
+          </div>
+          <div class="mb-2">
             <label for="clientIdInput" class="form-label fw-bold">Google Client ID:</label>
             <input type="text" id="clientIdInput" class="form-control form-control-sm" placeholder="ex: 123456789-abc...apps.googleusercontent.com">
+          </div>
+          <div class="mb-3">
+            <button type="button" class="btn btn-sm btn-link p-0" id="resetClientIdBtn" onclick="resetClientId()">
+              <i class="fa-solid fa-rotate-left me-1"></i>Remover substituição local e usar o padrão da página
+            </button>
           </div>
           <div class="alert alert-info p-2 small mb-0">
             <strong>ID da Agenda Configurada:</strong><br>
@@ -250,10 +268,11 @@
         <div class="modal-body">
           <div id="syncSpinner" class="spinner-border text-primary mb-3" style="width: 3rem; height: 3rem;" role="status"></div>
           <h5 id="syncTitle" class="fw-bold">Sincronizando com o Google Agenda...</h5>
-          <p id="syncStatus" class="text-muted small">Aguarde a autenticação...</p>
+          <div id="syncStatus" class="text-muted small">Aguarde a autenticação...</div>
           <div class="progress my-3" style="height: 20px;">
             <div id="syncProgressBar" class="progress-bar progress-bar-striped progress-bar-animated bg-success" style="width: 0%">0%</div>
           </div>
+          <p class="text-muted small mb-2" style="font-size:0.72rem;">Cada pessoa com quem esta agenda foi compartilhada autentica com o próprio e-mail Google. Isso só é pedido de novo quando o acesso expira (cerca de 1h) ou é feito logout.</p>
           <button id="syncCloseBtn" class="btn btn-primary btn-sm mt-2 d-none" data-bs-dismiss="modal">Concluir</button>
         </div>
       </div>
@@ -262,6 +281,28 @@
 
   <script>
     const TARGET_CALENDAR_ID = 'c_974543e8dd3e6da0c44e0165d1fd9ba627f1d520148d6e9c4e23f9c8a6996673@group.calendar.google.com';
+
+    // ------------------------------------------------------------------
+    //  Client ID "padrão" do Google Cloud, embutido diretamente no código.
+    //  Um Client ID OAuth NÃO é um segredo (ele é visível no navegador de
+    //  qualquer forma), então é seguro deixá-lo fixo aqui. Preenchendo este
+    //  valor uma única vez, QUALQUER pessoa que abrir esta mesma página
+    //  (em qualquer computador/navegador) já terá a sincronização
+    //  configurada automaticamente - sem precisar clicar em "Configurar
+    //  Google API". O botão de engrenagem continua disponível para quem
+    //  quiser usar um Client ID diferente só no seu navegador.
+    // ------------------------------------------------------------------
+    const DEFAULT_GOOGLE_CLIENT_ID = ''; // <- cole aqui o seu Client ID (ex: 123...apps.googleusercontent.com)
+
+    function getEffectiveClientId() {
+      const saved = (localStorage.getItem('gcal_client_id') || '').trim();
+      if (saved) return saved;
+      return DEFAULT_GOOGLE_CLIENT_ID.trim() || null;
+    }
+
+    function hasClientIdOverride() {
+      return !!(localStorage.getItem('gcal_client_id') || '').trim();
+    }
 
     if (typeof pdfjsLib !== 'undefined') {
       pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -397,7 +438,178 @@
       return 'periodo-misto';
     }
 
+    // ========================================================================
+    //  IDENTIFICAÇÃO / EVITAR DUPLICADOS — SEM BANCO DE DADOS
+    //
+    //  Cada evento criado por este app carrega, escondido em
+    //  extendedProperties.private, um "hash" que identifica a reserva
+    //  (data + período + sala + solicitante) e os principais dados dela.
+    //  Antes de sincronizar, consultamos o PRÓPRIO Google Agenda (não um
+    //  banco de dados externo) perguntando quais hashes já existem no
+    //  período do PDF carregado. Isso funciona automaticamente para
+    //  QUALQUER pessoa com quem a agenda for compartilhada, em qualquer
+    //  computador — o Google Agenda é a única "fonte da verdade".
+    // ========================================================================
+    const APP_SOURCE_TAG = 'unoesc-educare-sync-v1';
+
+    function buildReservaHash(res) {
+      const raw = [res.data, normalizeTurno(res.turno), (res.local || '').trim().toUpperCase(), (res.pessoa || '').trim().toUpperCase()].join('|');
+      let hash = 5381;
+      for (let i = 0; i < raw.length; i++) {
+        hash = ((hash << 5) + hash + raw.charCodeAt(i)) | 0;
+      }
+      return 'h' + Math.abs(hash).toString(36);
+    }
+
+    function buildEventPayload(res, hash) {
+      const [d, m, y] = res.data.split('/');
+      const horario = resolveHorario(res);
+      const startIso = `${y}-${m}-${d}T${horario.inicio}`;
+      const endIso = `${y}-${m}-${d}T${horario.fim}`;
+      const obsShort = (res.observacao || '').slice(0, 400);
+
+      return {
+        summary: `Reserva: ${res.local}`,
+        location: res.local,
+        description: `Solicitante: ${res.pessoa}\nPeríodo: ${turnoToPeriodoLabel(res.turno)}\nRecurso: ${res.recurso}` +
+                     (res.observacao ? `\nObservação: ${res.observacao}` : '') +
+                     `\nStatus: ${res.status}`,
+        start: { dateTime: startIso, timeZone: 'America/Sao_Paulo' },
+        end: { dateTime: endIso, timeZone: 'America/Sao_Paulo' },
+        extendedProperties: {
+          private: {
+            appSource: APP_SOURCE_TAG,
+            reservaHash: hash,
+            reservaData: res.data,
+            reservaTurno: normalizeTurno(res.turno),
+            reservaLocal: res.local,
+            reservaPessoa: res.pessoa,
+            reservaRecurso: res.recurso || '',
+            reservaObs: obsShort,
+            reservaStatus: res.status,
+            reservaHorario: `${horario.inicio}-${horario.fim}`
+          }
+        }
+      };
+    }
+
+    function eventDiffersFromReserva(existingEvent, res) {
+      const p = (existingEvent.extendedProperties && existingEvent.extendedProperties.private) || {};
+      const horario = resolveHorario(res);
+      const currentHorario = `${horario.inicio}-${horario.fim}`;
+      return (
+        p.reservaLocal !== res.local ||
+        p.reservaPessoa !== res.pessoa ||
+        (p.reservaRecurso || '') !== (res.recurso || '') ||
+        (p.reservaObs || '') !== (res.observacao || '').slice(0, 400) ||
+        p.reservaHorario !== currentHorario ||
+        p.reservaTurno !== normalizeTurno(res.turno)
+      );
+    }
+
+    async function fetchExistingSyncedEvents(accessToken, timeMin, timeMax) {
+      const map = new Map();
+      let pageToken = '';
+      do {
+        const params = new URLSearchParams({
+          privateExtendedProperty: `appSource=${APP_SOURCE_TAG}`,
+          timeMin, timeMax,
+          maxResults: '2500',
+          singleEvents: 'true'
+        });
+        if (pageToken) params.set('pageToken', pageToken);
+
+        const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(TARGET_CALENDAR_ID)}/events?${params.toString()}`, {
+          headers: { Authorization: `Bearer ${accessToken}` }
+        });
+        if (!resp.ok) throw new Error('Falha ao consultar eventos existentes na agenda (HTTP ' + resp.status + ')');
+        const data = await resp.json();
+        (data.items || []).forEach(ev => {
+          const h = ev.extendedProperties && ev.extendedProperties.private && ev.extendedProperties.private.reservaHash;
+          if (h) map.set(h, ev);
+        });
+        pageToken = data.nextPageToken || '';
+      } while (pageToken);
+      return map;
+    }
+
+    // Consulta o Google Agenda e classifica cada reserva do PDF em:
+    // 'criar' (nova) / 'atualizar' (mudou algo) / 'sem_alteracao' (já está
+    // igual) / 'excluir' (existe na agenda mas o PDF agora diz CANCELADO,
+    // ou existe na agenda mas sumiu do PDF = "órfã").
+    async function classifyReservas(accessToken) {
+      if (!accessToken || listReservas.length === 0) return;
+
+      const datasValidas = listReservas.filter(r => !r._isOrfao && /^\d{2}\/\d{2}\/\d{4}$/.test(r.data)).map(r => r.data);
+      if (datasValidas.length === 0) return;
+
+      const toISO = (d) => { const [dd, mm, yy] = d.split('/'); return `${yy}-${mm}-${dd}`; };
+      const isoList = datasValidas.map(toISO).sort();
+      const timeMin = `${isoList[0]}T00:00:00-03:00`;
+      const timeMax = `${isoList[isoList.length - 1]}T23:59:59-03:00`;
+
+      const existingMap = await fetchExistingSyncedEvents(accessToken, timeMin, timeMax);
+
+      // Remove órfãos calculados numa classificação anterior, para não duplicá-los
+      listReservas = listReservas.filter(r => !r._isOrfao);
+
+      const hashesNoRelatorio = new Set();
+
+      listReservas.forEach(res => {
+        const hash = buildReservaHash(res);
+        res._hash = hash;
+        hashesNoRelatorio.add(hash);
+        const existing = existingMap.get(hash);
+
+        if (res.status !== 'DEFERIDO') {
+          // Qualquer status diferente de DEFERIDO (CANCELADO, AGUARDANDO, etc.)
+          // não deve permanecer como evento ativo na agenda.
+          res._syncAction = existing ? 'excluir' : 'nenhuma';
+          res._existingEventId = existing ? existing.id : null;
+          res.selected = existing ? res.selected : false;
+          return;
+        }
+
+        if (!existing) {
+          res._syncAction = 'criar';
+          res._existingEventId = null;
+        } else if (eventDiffersFromReserva(existing, res)) {
+          res._syncAction = 'atualizar';
+          res._existingEventId = existing.id;
+        } else {
+          res._syncAction = 'sem_alteracao';
+          res._existingEventId = existing.id;
+        }
+      });
+
+      // Órfãs: eventos que já existem na agenda (criados por este app, no
+      // mesmo intervalo de datas do PDF) mas cujo hash não aparece em
+      // NENHUMA linha do PDF atual carregado agora.
+      existingMap.forEach((ev, hash) => {
+        if (hashesNoRelatorio.has(hash)) return;
+        const p = ev.extendedProperties.private || {};
+        listReservas.push({
+          id: 'orfao-' + hash,
+          data: p.reservaData || '',
+          turno: p.reservaTurno || '',
+          local: p.reservaLocal || '(desconhecido)',
+          pessoa: p.reservaPessoa || '',
+          recurso: p.reservaRecurso || '',
+          observacao: p.reservaObs || '',
+          status: 'NÃO ENCONTRADA NO PDF',
+          selected: false,
+          _isOrfao: true,
+          _hash: hash,
+          _syncAction: 'excluir',
+          _existingEventId: ev.id
+        });
+      });
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
+      updateConnectionBadge();
+      updateConfigModalInfo();
+
       const dropZone = document.getElementById('dropZone');
 
       dropZone.addEventListener('dragover', (e) => {
@@ -431,6 +643,7 @@
     function openConfigModal() {
       const savedId = localStorage.getItem('gcal_client_id') || '';
       document.getElementById('clientIdInput').value = savedId;
+      updateConfigModalInfo();
       if (!configModalInstance) {
         configModalInstance = new bootstrap.Modal(document.getElementById('configModal'));
       }
@@ -446,6 +659,144 @@
       localStorage.setItem('gcal_client_id', idVal);
       if (configModalInstance) configModalInstance.hide();
       alert('Client ID salvo com sucesso!');
+    }
+
+    function resetClientId() {
+      localStorage.removeItem('gcal_client_id');
+      document.getElementById('clientIdInput').value = '';
+      updateConfigModalInfo();
+      alert('Substituição local removida. Esta página voltará a usar o Client ID padrão.');
+    }
+
+    function updateConfigModalInfo() {
+      const info = document.getElementById('configDefaultInfo');
+      if (!info) return;
+      if (!hasClientIdOverride() && DEFAULT_GOOGLE_CLIENT_ID.trim()) {
+        info.classList.remove('d-none');
+      } else {
+        info.classList.add('d-none');
+      }
+    }
+
+    // ========================================================================
+    //  AUTENTICAÇÃO GOOGLE — cache de token para não repetir a tela de
+    //  permissão a cada clique em "Sincronizar". Um token de acesso do
+    //  Google (sem backend/refresh token) dura ~1h; enquanto for válido,
+    //  ele é reaproveitado do localStorage deste navegador. Ao expirar,
+    //  pedimos um novo com prompt "" (deixa o Google decidir - geralmente
+    //  não mostra mais a tela cheia de consentimento se a pessoa já
+    //  autorizou este app antes neste navegador).
+    // ========================================================================
+    const TOKEN_CACHE_KEY = 'gcal_token_cache';
+
+    function getCachedToken() {
+      try {
+        const raw = localStorage.getItem(TOKEN_CACHE_KEY);
+        if (!raw) return null;
+        const data = JSON.parse(raw);
+        if (data && data.access_token && data.expires_at && Date.now() < data.expires_at - 60000) {
+          return data;
+        }
+      } catch (e) { /* ignora cache corrompido */ }
+      return null;
+    }
+
+    function setCachedToken(accessToken, expiresInSeconds) {
+      try {
+        localStorage.setItem(TOKEN_CACHE_KEY, JSON.stringify({
+          access_token: accessToken,
+          expires_at: Date.now() + (expiresInSeconds || 3500) * 1000
+        }));
+      } catch (e) { /* localStorage indisponível - segue sem cache */ }
+    }
+
+    function clearCachedToken() {
+      localStorage.removeItem(TOKEN_CACHE_KEY);
+      localStorage.removeItem('gcal_user_email');
+      updateConnectionBadge();
+    }
+
+    function updateConnectionBadge() {
+      const email = localStorage.getItem('gcal_user_email');
+      const badge = document.getElementById('googleConnBadge');
+      if (!badge) return;
+      const conectado = !!(email && getCachedToken());
+      if (conectado) {
+        badge.innerHTML = `<i class="fa-solid fa-circle-check me-1"></i>${email}`;
+        badge.className = 'btn btn-sm btn-success position-absolute top-0 start-0 m-3 shadow-sm';
+        badge.title = 'Clique para desconectar esta conta';
+        badge.onclick = () => { if (confirm('Desconectar esta conta do Google neste navegador?')) clearCachedToken(); };
+      } else {
+        badge.innerHTML = `<i class="fa-brands fa-google me-1"></i>Conectar ao Google`;
+        badge.className = 'btn btn-sm btn-outline-light position-absolute top-0 start-0 m-3 shadow-sm';
+        badge.title = 'Entrar com sua conta Google';
+        badge.onclick = () => connectGoogleAccount();
+      }
+    }
+
+    // Obtém um access token válido. Se já houver um em cache, usa direto
+    // (sem popup nenhum). Se não houver e `interactive` for true, abre o
+    // fluxo de login do Google; se for false, retorna null silenciosamente
+    // (usado para checar duplicados sem forçar login logo ao abrir o PDF).
+    function requestGoogleToken({ interactive }) {
+      return new Promise((resolve, reject) => {
+        const clientId = getEffectiveClientId();
+        if (!clientId) {
+          if (interactive) openConfigModal();
+          reject(new Error('SEM_CLIENT_ID'));
+          return;
+        }
+
+        const cached = getCachedToken();
+        if (cached) { resolve(cached.access_token); return; }
+
+        if (!interactive) { resolve(null); return; }
+
+        tokenClient = google.accounts.oauth2.initTokenClient({
+          client_id: clientId,
+          scope: 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email',
+          callback: async (tokenResponse) => {
+            if (tokenResponse.error) {
+              reject(new Error(tokenResponse.error_description || tokenResponse.error));
+              return;
+            }
+            setCachedToken(tokenResponse.access_token, tokenResponse.expires_in);
+            try {
+              const uResp = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+                headers: { Authorization: `Bearer ${tokenResponse.access_token}` }
+              });
+              if (uResp.ok) {
+                const u = await uResp.json();
+                if (u.email) localStorage.setItem('gcal_user_email', u.email);
+              }
+            } catch (e) { /* segue mesmo sem conseguir o e-mail */ }
+            updateConnectionBadge();
+            resolve(tokenResponse.access_token);
+          },
+        });
+        // prompt vazio: deixa o Google decidir. Na primeira vez, mostra a
+        // tela de permissão; depois disso, no mesmo navegador, tende a não
+        // mostrar mais (a menos que o acesso seja revogado ou expire).
+        tokenClient.requestAccessToken({ prompt: '' });
+      });
+    }
+
+    async function connectGoogleAccount() {
+      try {
+        await requestGoogleToken({ interactive: true });
+        document.getElementById('notConnectedBanner')?.classList.add('d-none');
+        if (listReservas.length > 0) {
+          const cached = getCachedToken();
+          if (cached) {
+            await classifyReservas(cached.access_token);
+            renderTable();
+          }
+        }
+      } catch (err) {
+        if (err.message !== 'SEM_CLIENT_ID') {
+          alert('Não foi possível conectar ao Google: ' + err.message);
+        }
+      }
     }
 
     // ======================================================================
@@ -496,6 +847,13 @@
           alert('Nenhuma reserva pôde ser identificada no PDF informado. Verifique se é o relatório "Agenda de Reservas - Sintético".');
         } else {
           document.getElementById('legendSection').classList.remove('d-none');
+          const cached = getCachedToken();
+          if (cached) {
+            try { await classifyReservas(cached.access_token); } catch (e) { console.error(e); }
+            document.getElementById('notConnectedBanner').classList.add('d-none');
+          } else {
+            document.getElementById('notConnectedBanner').classList.remove('d-none');
+          }
           renderTable();
         }
 
@@ -659,6 +1017,25 @@
       });
     }
 
+    function syncActionBadge(res) {
+      switch (res._syncAction) {
+        case 'criar':
+          return '<span class="badge-status" style="background:#198754;color:#fff;">🟢 Nova</span>';
+        case 'atualizar':
+          return '<span class="badge-status" style="background:#ffc107;color:#000;">🟡 Alterada</span>';
+        case 'sem_alteracao':
+          return '<span class="badge-status" style="background:#e9ecef;color:#495057;">⚪ Sem alteração</span>';
+        case 'excluir':
+          return res._isOrfao
+            ? '<span class="badge-status" style="background:#dc3545;color:#fff;">🔴 Sumiu do PDF</span>'
+            : '<span class="badge-status" style="background:#dc3545;color:#fff;">🔴 Cancelada — remover</span>';
+        case 'nenhuma':
+          return '<span class="badge-status" style="background:#e9ecef;color:#adb5bd;">— Nunca sincronizada</span>';
+        default:
+          return '<span class="badge-status" style="background:#e9ecef;color:#6c757d;">Não verificado</span>';
+      }
+    }
+
     function renderTable() {
       const tbody = document.getElementById('reservasTableBody');
       tbody.innerHTML = '';
@@ -676,7 +1053,7 @@
       });
 
       if (visibleList.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="9" class="text-center text-muted py-4">Nenhuma reserva encontrada para os filtros aplicados.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="10" class="text-center text-muted py-4">Nenhuma reserva encontrada para os filtros aplicados.</td></tr>`;
         updateCounters();
         return;
       }
@@ -687,33 +1064,38 @@
         else if (res.status.includes('CANCEL')) badgeClass = 'badge-cancelado';
         else if (res.status.includes('AGUARDANDO')) badgeClass = 'badge-aguardando';
 
-        const gCalUrl = getGoogleCalendarSingleUrl(res);
-        const periodoLabel = turnoToPeriodoLabel(res.turno);
+        const periodoLabel = res._isOrfao ? '-' : turnoToPeriodoLabel(res.turno);
         const periodoClass = periodoBadgeClass(res.turno);
-        const horarioResolvido = resolveHorario(res);
-        const horarioBadge = horarioResolvido.fromObservacao
+        const horarioResolvido = res._isOrfao ? null : resolveHorario(res);
+        const horarioBadge = (horarioResolvido && horarioResolvido.fromObservacao)
           ? `<br><small class="text-primary" title="Horário identificado na Observação, será usado ao criar o evento"><i class="fa-solid fa-clock me-1"></i>${horarioResolvido.inicio.slice(0,5)}-${horarioResolvido.fim.slice(0,5)}</small>`
           : '';
 
+        const acaoCol = res._isOrfao
+          ? `<td class="text-center text-muted"><i class="fa-solid fa-ban"></i></td>`
+          : `<td class="text-center">
+              <a href="${getGoogleCalendarSingleUrl(res)}" target="_blank" class="btn btn-sm btn-outline-primary" title="Adicionar no Google Agenda">
+                <i class="fa-regular fa-calendar-plus"></i>
+              </a>
+            </td>`;
+
         const tr = document.createElement('tr');
         if (res.selected) tr.classList.add('tr-selected');
+        if (res._isOrfao) tr.classList.add('table-light');
 
         tr.innerHTML = `
           <td class="text-center">
-            <input type="checkbox" class="form-check-input" ${res.selected ? 'checked' : ''} onchange="toggleSelect(${res.id}, this.checked)">
+            <input type="checkbox" class="form-check-input" ${res.selected ? 'checked' : ''} onchange="toggleSelect('${res.id}', this.checked)">
           </td>
-          <td><strong>${res.data}</strong></td>
+          <td><strong>${res.data || '-'}</strong></td>
           <td><span class="badge-periodo ${periodoClass}">${periodoLabel}</span>${horarioBadge}</td>
           <td><strong>${res.local}</strong></td>
           <td><small>${res.pessoa}</small></td>
           <td><small>${res.recurso}</small></td>
           <td><small class="text-truncate-2" title="${(res.observacao || '').replace(/"/g,'&quot;')}">${res.observacao || '<span class="text-muted">-</span>'}</small></td>
           <td><span class="badge-status ${badgeClass}">${res.status}</span></td>
-          <td class="text-center">
-            <a href="${gCalUrl}" target="_blank" class="btn btn-sm btn-outline-primary" title="Adicionar no Google Agenda">
-              <i class="fa-regular fa-calendar-plus"></i>
-            </a>
-          </td>
+          <td>${syncActionBadge(res)}</td>
+          ${acaoCol}
         `;
         tbody.appendChild(tr);
       });
@@ -727,7 +1109,7 @@
     }
 
     function toggleSelect(id, checked) {
-      const res = listReservas.find(r => r.id === id);
+      const res = listReservas.find(r => String(r.id) === String(id));
       if (res) res.selected = checked;
       renderTable();
     }
@@ -783,9 +1165,9 @@
     }
 
     function downloadICS() {
-      const selected = listReservas.filter(r => r.selected);
+      const selected = listReservas.filter(r => r.selected && !r._isOrfao);
       if (selected.length === 0) {
-        alert('Selecione pelo menos uma reserva na lista.');
+        alert('Selecione pelo menos uma reserva na lista (linhas marcadas para remoção não entram no .ICS).');
         return;
       }
 
@@ -828,9 +1210,9 @@
     //  GERAR PDF DAS RESERVAS SELECIONADAS
     // ======================================================================
     function downloadPDF() {
-      const selected = listReservas.filter(r => r.selected);
+      const selected = listReservas.filter(r => r.selected && !r._isOrfao);
       if (selected.length === 0) {
-        alert('Selecione pelo menos uma reserva na lista para gerar o PDF.');
+        alert('Selecione pelo menos uma reserva na lista para gerar o PDF (linhas marcadas para remoção não entram).');
         return;
       }
       if (typeof window.jspdf === 'undefined') {
@@ -886,8 +1268,33 @@
       doc.save(`Reservas_Selecionadas_UNOESC_${new Date().toISOString().slice(0, 10)}.pdf`);
     }
 
-    function syncToGoogleCalendar() {
-      const clientId = localStorage.getItem('gcal_client_id');
+    function resetSyncModalUI(title, status) {
+      document.getElementById('syncSpinner').classList.remove('d-none');
+      document.getElementById('syncTitle').innerText = title;
+      document.getElementById('syncStatus').innerText = status;
+      document.getElementById('syncProgressBar').style.width = '0%';
+      document.getElementById('syncProgressBar').innerText = '0%';
+      document.getElementById('syncCloseBtn').classList.add('d-none');
+    }
+
+    function showSyncError(title, msg) {
+      document.getElementById('syncSpinner').classList.add('d-none');
+      document.getElementById('syncTitle').innerText = title;
+      document.getElementById('syncStatus').innerText = msg;
+      document.getElementById('syncCloseBtn').classList.remove('d-none');
+    }
+
+    async function extractApiError(resp) {
+      try {
+        const j = await resp.json();
+        return (j.error && j.error.message) || `HTTP ${resp.status}`;
+      } catch (e) {
+        return `HTTP ${resp.status}`;
+      }
+    }
+
+    async function syncToGoogleCalendar() {
+      const clientId = getEffectiveClientId();
       if (!clientId) {
         openConfigModal();
         return;
@@ -903,88 +1310,139 @@
         syncModalInstance = new bootstrap.Modal(document.getElementById('syncModal'));
       }
 
-      document.getElementById('syncSpinner').classList.remove('d-none');
-      document.getElementById('syncTitle').innerText = 'Autenticando no Google...';
-      document.getElementById('syncStatus').innerText = 'Aguarde a confirmação na janela popup do Google.';
-      document.getElementById('syncProgressBar').style.width = '0%';
-      document.getElementById('syncProgressBar').innerText = '0%';
-      document.getElementById('syncCloseBtn').classList.add('d-none');
+      resetSyncModalUI('Conectando à sua conta Google...', 'Se for a primeira vez neste navegador, confirme na janela do Google.');
       syncModalInstance.show();
 
-      tokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: clientId,
-        scope: 'https://www.googleapis.com/auth/calendar.events',
-        callback: async (tokenResponse) => {
-          if (tokenResponse.error) {
-            document.getElementById('syncSpinner').classList.add('d-none');
-            document.getElementById('syncTitle').innerText = 'Falha na Autenticação';
-            document.getElementById('syncStatus').innerText = tokenResponse.error_description || tokenResponse.error;
-            document.getElementById('syncCloseBtn').classList.remove('d-none');
-            return;
-          }
+      let accessToken;
+      try {
+        accessToken = await requestGoogleToken({ interactive: true });
+      } catch (err) {
+        showSyncError('Falha na Autenticação', err.message === 'SEM_CLIENT_ID' ? 'Configure o Client ID do Google primeiro.' : err.message);
+        return;
+      }
+      document.getElementById('notConnectedBanner')?.classList.add('d-none');
 
-          await batchUploadEvents(tokenResponse.access_token, selected);
-        },
-      });
+      // Reclassifica com dados atuais da agenda antes de enviar, para
+      // não sobrescrever por engano algo que mudou entre a leitura do
+      // PDF e o momento do envio.
+      document.getElementById('syncStatus').innerText = 'Verificando o que já existe na agenda (evitando duplicados)...';
+      const idsSelecionadosAntes = new Set(selected.filter(r => !r._isOrfao).map(r => r.id));
+      const orfaosSelecionadosAntes = new Set(selected.filter(r => r._isOrfao).map(r => r._hash));
 
-      tokenClient.requestAccessToken({ prompt: 'consent' });
+      try {
+        await classifyReservas(accessToken);
+      } catch (err) {
+        showSyncError('Erro ao verificar a agenda', err.message);
+        return;
+      }
+      renderTable();
+
+      // Preserva a seleção original do usuário (por id/hash) após a
+      // reclassificação, incluindo órfãs recalculadas.
+      const listaFinal = listReservas.filter(r =>
+        (!r._isOrfao && idsSelecionadosAntes.has(r.id)) ||
+        (r._isOrfao && orfaosSelecionadosAntes.has(r._hash))
+      );
+
+      if (listaFinal.length === 0) {
+        showSyncError('Nada a fazer', 'As reservas selecionadas não geraram nenhuma ação (provavelmente já estavam sincronizadas e sem mudanças).');
+        return;
+      }
+
+      await batchUploadEvents(accessToken, listaFinal);
     }
 
     async function batchUploadEvents(accessToken, selectedList) {
-      document.getElementById('syncTitle').innerText = 'Enviando Reservas...';
-      let successCount = 0;
-      let failCount = 0;
+      document.getElementById('syncSpinner').classList.remove('d-none');
+      document.getElementById('syncTitle').innerText = 'Sincronizando...';
+      document.getElementById('syncCloseBtn').classList.add('d-none');
+
+      const resumo = { criadas: 0, atualizadas: 0, removidas: 0, ignoradas: 0, erros: [] };
+      const acaoLabel = { criar: 'Criando', atualizar: 'Atualizando', excluir: 'Removendo', sem_alteracao: 'Ignorando (sem alteração)', nenhuma: 'Ignorando' };
 
       for (let i = 0; i < selectedList.length; i++) {
         const res = selectedList[i];
         const progressPct = Math.round(((i + 1) / selectedList.length) * 100);
+        const acao = res._syncAction || 'criar';
 
-        document.getElementById('syncStatus').innerText = `Enviando item ${i + 1} de ${selectedList.length}: ${res.local}`;
+        document.getElementById('syncStatus').innerText = `${acaoLabel[acao] || 'Processando'}: ${res.local} — ${res.pessoa} (${i + 1}/${selectedList.length})`;
         document.getElementById('syncProgressBar').style.width = `${progressPct}%`;
         document.getElementById('syncProgressBar').innerText = `${progressPct}%`;
 
-        const [d, m, y] = res.data.split('/');
-        const horario = resolveHorario(res);
-        const startIso = `${y}-${m}-${d}T${horario.inicio}`;
-        const endIso = `${y}-${m}-${d}T${horario.fim}`;
-
-        const eventData = {
-          summary: `Reserva: ${res.local}`,
-          location: res.local,
-          description: `Solicitante: ${res.pessoa}\nPeríodo: ${turnoToPeriodoLabel(res.turno)}\nRecurso: ${res.recurso}` +
-                       (res.observacao ? `\nObservação: ${res.observacao}` : '') +
-                       `\nStatus: ${res.status}`,
-          start: { dateTime: startIso, timeZone: 'America/Sao_Paulo' },
-          end: { dateTime: endIso, timeZone: 'America/Sao_Paulo' }
-        };
-
         try {
-          const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(TARGET_CALENDAR_ID)}/events`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${accessToken}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(eventData)
-          });
+          if (acao === 'sem_alteracao' || acao === 'nenhuma') {
+            resumo.ignoradas++;
+            continue;
+          }
 
-          if (resp.ok) {
-            successCount++;
-          } else {
-            failCount++;
-            const errJson = await resp.json();
-            console.error('Erro na resposta da API Google:', errJson);
+          const hash = res._hash || buildReservaHash(res);
+
+          if (acao === 'criar') {
+            const payload = buildEventPayload(res, hash);
+            const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(TARGET_CALENDAR_ID)}/events`, {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            if (!resp.ok) throw new Error(await extractApiError(resp));
+            resumo.criadas++;
+
+          } else if (acao === 'atualizar') {
+            const payload = buildEventPayload(res, hash);
+            const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(TARGET_CALENDAR_ID)}/events/${res._existingEventId}`, {
+              method: 'PATCH',
+              headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            if (!resp.ok) throw new Error(await extractApiError(resp));
+            resumo.atualizadas++;
+
+          } else if (acao === 'excluir') {
+            if (!res._existingEventId) { resumo.ignoradas++; continue; }
+            const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(TARGET_CALENDAR_ID)}/events/${res._existingEventId}`, {
+              method: 'DELETE',
+              headers: { 'Authorization': `Bearer ${accessToken}` }
+            });
+            if (!resp.ok && resp.status !== 410 && resp.status !== 404) throw new Error(await extractApiError(resp));
+            resumo.removidas++;
           }
         } catch (err) {
-          failCount++;
-          console.error('Erro de requisição:', err);
+          console.error(err);
+          resumo.erros.push({ item: `${res.local} — ${res.pessoa} (${res.data})`, motivo: err.message });
+          if (/401|invalid.?token|unauthoriz/i.test(err.message)) {
+            clearCachedToken();
+          }
         }
       }
 
+      showSyncSummary(resumo);
+    }
+
+    function showSyncSummary(resumo) {
       document.getElementById('syncSpinner').classList.add('d-none');
       document.getElementById('syncTitle').innerText = 'Sincronização Concluída!';
-      document.getElementById('syncStatus').innerHTML = `<strong class="text-success">${successCount} eventos criados com sucesso!</strong>${failCount > 0 ? `<br><span class="text-danger">${failCount} falharam.</span>` : ''}`;
+
+      let html = `
+        <div class="row g-2 text-start mt-1 mb-2">
+          <div class="col-6"><span class="badge-status" style="background:#198754;color:#fff;">🟢 Criadas: ${resumo.criadas}</span></div>
+          <div class="col-6"><span class="badge-status" style="background:#ffc107;color:#000;">🟡 Atualizadas: ${resumo.atualizadas}</span></div>
+          <div class="col-6"><span class="badge-status" style="background:#dc3545;color:#fff;">🔴 Removidas: ${resumo.removidas}</span></div>
+          <div class="col-6"><span class="badge-status" style="background:#e9ecef;color:#495057;">⚪ Ignoradas: ${resumo.ignoradas}</span></div>
+        </div>`;
+
+      if (resumo.erros.length > 0) {
+        html += `<div class="alert alert-danger p-2 small text-start mt-2 mb-0" style="max-height:150px; overflow-y:auto;">
+          <strong>${resumo.erros.length} erro(s):</strong>
+          <ul class="mb-0 ps-3">${resumo.erros.map(e => `<li>${e.item}: ${e.motivo}</li>`).join('')}</ul>
+        </div>`;
+      }
+
+      document.getElementById('syncStatus').innerHTML = html;
+      document.getElementById('syncProgressBar').style.width = '100%';
+      document.getElementById('syncProgressBar').innerText = '100%';
       document.getElementById('syncCloseBtn').classList.remove('d-none');
+
+      renderTable();
     }
   </script>
 </body>

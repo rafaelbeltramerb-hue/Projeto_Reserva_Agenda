@@ -106,7 +106,7 @@
   <!-- Cabeçalho -->
   <header class="header-bg text-center position-relative">
     <div class="container">
-      <h2 class="fw-bold"><i class="fa-regular fa-calendar-check me-2"></i>Sincronizador de Reservas com Agenda Google</h2>
+      <h2 class="fw-bold"><i class="fa-regular fa-calendar-check me-2"></i>Sincronizador de Reservas UNOESC</h2>
       <p class="lead mb-0 fs-6">Agenda de Destino: <strong>Reservas Sistema Educare</strong> (ti.xxe@unoesc.edu.br)</p>
     </div>
     <button type="button" class="btn btn-sm btn-light position-absolute top-0 end-0 m-3 shadow-sm" onclick="openConfigModal()" title="Configurar Google OAuth Client ID">
@@ -153,21 +153,31 @@
     <!-- Painel de Filtros -->
     <div id="controlsSection" class="card card-custom p-3">
       <div class="row align-items-center g-2">
-        <div class="col-md-4">
+        <div class="col-md-3">
           <div class="input-group input-group-sm">
             <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
             <input type="text" id="searchInput" class="form-control" placeholder="Buscar por solicitante, sala, recurso, observação..." oninput="renderTable()">
           </div>
         </div>
-        <div class="col-md-3">
+        <div class="col-md-2">
           <select id="statusFilter" class="form-select form-select-sm" onchange="renderTable()">
-            <option value="DEFERIDO" selected>Somente DEFERIDOS</option>
-            <option value="TODOS">Todos os Status</option>
+            <option value="TODOS" selected>Todos os Status</option>
+            <option value="DEFERIDO">Somente DEFERIDOS</option>
             <option value="AGUARDANDO ATENDIMENTO">Somente AGUARDANDO</option>
             <option value="CANCELADO">Somente CANCELADOS</option>
           </select>
         </div>
-        <div class="col-md-5 text-end">
+        <div class="col-md-3">
+          <div class="dropdown">
+            <button class="btn btn-sm btn-outline-secondary dropdown-toggle w-100 text-start" type="button" id="recursoFilterBtn" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
+              <i class="fa-solid fa-filter me-1"></i><span id="recursoFilterLabel">Filtrar por Recurso</span>
+            </button>
+            <ul class="dropdown-menu p-2" id="recursoFilterMenu" style="max-height: 320px; overflow-y: auto; min-width: 260px;">
+              <li class="text-muted small px-2 py-1">Carregue um PDF para ver os recursos disponíveis.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="col-md-4 text-end">
           <button class="btn btn-sm btn-outline-primary me-1" onclick="selectAllVisible(true)">
             <i class="fa-regular fa-square-check me-1"></i>Marcar Visíveis
           </button>
@@ -843,6 +853,7 @@
         allReservas.forEach((r, idx) => { r.id = idx + 1; });
         listReservas = allReservas;
         populateStatusFilter();
+        populateRecursoFilter();
 
         if (listReservas.length === 0) {
           alert('Nenhuma reserva pôde ser identificada no PDF informado. Verifique se é o relatório "Agenda de Reservas - Sintético".');
@@ -1018,6 +1029,76 @@
       });
     }
 
+    // ------------------------------------------------------------------
+    //  Filtro por Recurso: dropdown com checkboxes populado com todos os
+    //  "Tipo de recurso" distintos encontrados no PDF carregado. Conjunto
+    //  vazio = sem filtro (mostra tudo); marcar um ou mais recursos
+    //  restringe a tabela só a eles.
+    // ------------------------------------------------------------------
+    let activeRecursoFilter = new Set();
+
+    function populateRecursoFilter() {
+      const menu = document.getElementById('recursoFilterMenu');
+      activeRecursoFilter = new Set();
+
+      const distinctRecursos = [...new Set(listReservas.filter(r => !r._isOrfao).map(r => (r.recurso || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+
+      if (distinctRecursos.length === 0) {
+        menu.innerHTML = '<li class="text-muted small px-2 py-1">Nenhum recurso encontrado.</li>';
+        updateRecursoFilterLabel();
+        return;
+      }
+
+      let html = `
+        <li class="d-flex justify-content-between px-2 pb-2 border-bottom mb-2">
+          <button type="button" class="btn btn-sm btn-link p-0" onclick="recursoFilterSetAll(true)">Marcar todos</button>
+          <button type="button" class="btn btn-sm btn-link p-0" onclick="recursoFilterSetAll(false)">Limpar</button>
+        </li>`;
+
+      distinctRecursos.forEach((recurso, idx) => {
+        const safeId = `recursoChk_${idx}`;
+        html += `
+          <li class="px-2">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" value="${recurso.replace(/"/g, '&quot;')}" id="${safeId}" onchange="toggleRecursoFilter(this)">
+              <label class="form-check-label small" for="${safeId}">${recurso}</label>
+            </div>
+          </li>`;
+      });
+
+      menu.innerHTML = html;
+      updateRecursoFilterLabel();
+    }
+
+    function toggleRecursoFilter(checkbox) {
+      if (checkbox.checked) activeRecursoFilter.add(checkbox.value);
+      else activeRecursoFilter.delete(checkbox.value);
+      updateRecursoFilterLabel();
+      renderTable();
+    }
+
+    function recursoFilterSetAll(checkAll) {
+      const menu = document.getElementById('recursoFilterMenu');
+      const checkboxes = menu.querySelectorAll('input[type="checkbox"]');
+      activeRecursoFilter = new Set();
+      checkboxes.forEach(cb => {
+        cb.checked = checkAll;
+        if (checkAll) activeRecursoFilter.add(cb.value);
+      });
+      updateRecursoFilterLabel();
+      renderTable();
+    }
+
+    function updateRecursoFilterLabel() {
+      const label = document.getElementById('recursoFilterLabel');
+      if (!label) return;
+      if (activeRecursoFilter.size === 0) {
+        label.textContent = 'Filtrar por Recurso';
+      } else {
+        label.textContent = `Recurso (${activeRecursoFilter.size} selecionado${activeRecursoFilter.size > 1 ? 's' : ''})`;
+      }
+    }
+
     function syncActionBadge(res) {
       switch (res._syncAction) {
         case 'criar':
@@ -1050,7 +1131,8 @@
                               res.recurso.toLowerCase().includes(search) ||
                               (res.observacao || '').toLowerCase().includes(search);
         const matchesStatus = statusFilter === 'TODOS' || res.status === statusFilter;
-        return matchesSearch && matchesStatus;
+        const matchesRecurso = activeRecursoFilter.size === 0 || activeRecursoFilter.has((res.recurso || '').trim());
+        return matchesSearch && matchesStatus && matchesRecurso;
       });
 
       if (visibleList.length === 0) {
@@ -1125,8 +1207,9 @@
                               res.recurso.toLowerCase().includes(search) ||
                               (res.observacao || '').toLowerCase().includes(search);
         const matchesStatus = statusFilter === 'TODOS' || res.status === statusFilter;
+        const matchesRecurso = activeRecursoFilter.size === 0 || activeRecursoFilter.has((res.recurso || '').trim());
 
-        if (matchesSearch && matchesStatus) {
+        if (matchesSearch && matchesStatus && matchesRecurso) {
           res.selected = check;
         }
       });

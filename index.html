@@ -533,7 +533,15 @@
         const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(TARGET_CALENDAR_ID)}/events?${params.toString()}`, {
           headers: { Authorization: `Bearer ${accessToken}` }
         });
-        if (!resp.ok) throw new Error('Falha ao consultar eventos existentes na agenda (HTTP ' + resp.status + ')');
+        if (!resp.ok) {
+          if (resp.status === 403) {
+            throw new Error('Sua conta Google não tem permissão suficiente nesta agenda. Peça para quem administra a agenda compartilhar com seu e-mail usando a permissão "Fazer alterações em eventos" (Configurações e compartilhamento da agenda → Compartilhar com pessoas específicas).');
+          }
+          if (resp.status === 404) {
+            throw new Error('A agenda de destino não foi encontrada para esta conta. Confirme se o e-mail conectado tem acesso a ela.');
+          }
+          throw new Error('Falha ao consultar eventos existentes na agenda (HTTP ' + resp.status + ')');
+        }
         const data = await resp.json();
         (data.items || []).forEach(ev => {
           const h = ev.extendedProperties && ev.extendedProperties.private && ev.extendedProperties.private.reservaHash;
